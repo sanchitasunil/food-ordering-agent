@@ -1,0 +1,24 @@
+{
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "google/gemini-2.5-flash"
+      },
+      "workspace": "./workspace",
+      "skills": ["swiggy"]
+    }
+  },
+  "models": {
+    "providers": {
+      "google": {
+        "api": "google-generative-ai",
+        "apiKey": "${GEMINI_API_KEY}"
+      }
+    }
+  },
+  "skills": {
+    "load": {
+      "extraDirs": ["./skills"]
+    }
+  }
+}
