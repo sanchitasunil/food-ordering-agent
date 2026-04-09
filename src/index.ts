@@ -1,43 +1,41 @@
 import "dotenv/config";
 import { startListening, stopListening } from "./ear.js";
-import { chat, warmup, getFiller } from "./brain.js";
-import { playAudio } from "./voice.js";
+import { chat, warmup, synthesizeSpeech } from "./brain.js";
+import { playAudio, stopPlayback } from "./voice.js";
 import {
   logUser,
   logVoice,
   logError,
+  logSystem,
   startThinking,
   stopThinking,
 } from "./ui.js";
 
-/**
- * Main "Mute-While-Talking" event loop.
- *
- * Flow:
- *  1. Mic is live, streaming to Deepgram.
- *  2. On final transcript → mute mic immediately.
- *  3. Play filler audio ("Let me check...") while LLM thinks.
- *  4. Send text to brain.ts. Listen for tool calls and logTool().
- *  5. On LLM reply → stop thinking spinner.
- *  6. Generate Murf TTS → logVoice(reply) → play audio.
- *  7. Resume mic.
- */
+// Pre-generated filler clip — synthesised once at startup
+let fillerAudio: Buffer | null = null;
+
 async function handleTranscription(text: string): Promise<void> {
-  // Mute mic so speakers don't feed back
   stopListening();
-
   logUser(text);
-
-  // Play filler audio in the background while the LLM processes
-  const filler = getFiller();
-  if (filler) {
-    playAudio(filler).catch(() => {});
-  }
-
   startThinking("Processing...");
+
+  // Schedule filler to play only if LLM takes longer than 2s
+  let fillerPlaying = false;
+  const fillerTimer = setTimeout(async () => {
+    if (fillerAudio) {
+      fillerPlaying = true;
+      await playAudio(fillerAudio).catch(() => {});
+      fillerPlaying = false;
+    }
+  }, 2000);
 
   try {
     const response = await chat(text);
+
+    // Cancel or stop filler — response is ready
+    clearTimeout(fillerTimer);
+    if (fillerPlaying) stopPlayback();
+
     stopThinking();
 
     if (response.audio) {
@@ -45,17 +43,25 @@ async function handleTranscription(text: string): Promise<void> {
       await playAudio(response.audio);
     }
   } catch (err) {
+    clearTimeout(fillerTimer);
+    if (fillerPlaying) stopPlayback();
     stopThinking();
     logError(err);
   }
 
-  // Resume listening
   startListening(handleTranscription);
 }
 
 // ── Entry point ──────────────────────────────────────────────
-// Warmup: prime OpenClaw config + pre-generate filler TTS clip
-warmup();
+logSystem("Starting up...");
 
-// Start listening
+// Warm up OpenClaw + pre-generate filler audio in parallel
+await Promise.all([
+  warmup(),
+  synthesizeSpeech("Let me check on that for you.").then((buf) => {
+    fillerAudio = buf;
+  }).catch(() => {}),
+]);
+
+logSystem("Ready — listening for your voice.");
 startListening(handleTranscription);

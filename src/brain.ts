@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import { getReplyFromConfig } from "openclaw";
 import plugin from "openclaw-murf-tts";
-import { logTool, logAgent } from "./ui.js";
+import { logTool, logAgent, logSystem } from "./ui.js";
 
 // Point OpenClaw at our local config before it tries to load from ~/.openclaw/
 process.env.OPENCLAW_CONFIG_PATH ??= resolve("openclaw.json");
@@ -18,14 +18,49 @@ const SESSION_KEY = "food-agent-local";
 // Bengaluru default geolocation context for the Swiggy skill
 const BENGALURU = { lat: 12.9716, lng: 77.5946 };
 
-// Config override — merged on top of OpenClaw's base config to force Google Gemini
-const CONFIG_OVERRIDE = {
+// ── LLM provider switching ───────────────────────────────────────
+//
+// Set LLM_PROVIDER in .env to switch when one provider hits rate limits.
+// Three independent provider/model combinations are kept ready so you
+// can rotate without touching code:
+//
+//   - "gemini"      → Google Gemini 2.5 Flash, direct API (default)
+//                     uses GEMINI_API_KEY
+//
+//   - "openrouter"  → MiniMax M2.5 via OpenRouter gateway
+//                     uses OPENROUTER_API_KEY. Picked because MiniMax
+//                     is stable, supports tool calling (required for the
+//                     Swiggy skill), and is essentially free at OR pricing.
+//
+//   - "opencode-go" → A free model via opencode-go gateway
+//                     uses OPENCODE_GO_API_KEY + OPENCODE_GO_BASE_URL.
+//                     ⚠️ TODO: confirm exact base URL and model id with the
+//                     opencode-go service. Placeholder is a guess.
+//
+// Optionally pin a specific model on the active provider with LLM_MODEL.
+//
+const PROVIDER_DEFAULT_MODELS: Record<string, string> = {
+  gemini: "google/gemini-2.5-flash",
+  openrouter: "openrouter/minimax/minimax-m2.5",
+  "opencode-go": "opencode-go/free-model", // TODO: replace with real free model id
+};
+
+const ACTIVE_PROVIDER = (process.env.LLM_PROVIDER || "gemini").toLowerCase();
+if (!(ACTIVE_PROVIDER in PROVIDER_DEFAULT_MODELS)) {
+  throw new Error(
+    `Unknown LLM_PROVIDER '${ACTIVE_PROVIDER}'. Use one of: ${Object.keys(PROVIDER_DEFAULT_MODELS).join(", ")}`,
+  );
+}
+const ACTIVE_MODEL = process.env.LLM_MODEL || PROVIDER_DEFAULT_MODELS[ACTIVE_PROVIDER];
+
+// All three provider configs are kept loaded so switching is purely a
+// LLM_PROVIDER env-var change — no code edit, no rebuild.
+export const CONFIG_OVERRIDE = {
   agents: {
     defaults: {
-      model: {
-        primary: "google/gemini-2.5-flash",
-      },
+      model: { primary: ACTIVE_MODEL },
       workspace: resolve("workspace"),
+      skipBootstrap: true,
     },
   },
   models: {
@@ -33,6 +68,13 @@ const CONFIG_OVERRIDE = {
       google: {
         api: "google-generative-ai",
         apiKey: process.env.GEMINI_API_KEY,
+      },
+      openrouter: {
+        apiKey: process.env.OPENROUTER_API_KEY,
+      },
+      "opencode-go": {
+        apiKey: process.env.OPENCODE_GO_API_KEY,
+        baseUrl: process.env.OPENCODE_GO_BASE_URL,
       },
     },
   },
@@ -46,6 +88,8 @@ const CONFIG_OVERRIDE = {
   },
 };
 
+export { ACTIVE_PROVIDER, ACTIVE_MODEL };
+
 export interface AgentResponse {
   text: string;
   audio: Buffer | null;
@@ -54,12 +98,8 @@ export interface AgentResponse {
 /**
  * Synthesise speech using the Murf plugin's provider.
  */
-async function synthesizeSpeech(text: string): Promise<Buffer | null> {
-  if (!murfProvider?.synthesize) {
-    logAgent("[TTS skipped: Murf provider not registered]");
-    return null;
-  }
-  if (!text.trim()) return null;
+export async function synthesizeSpeech(text: string): Promise<Buffer | null> {
+  if (!murfProvider?.synthesize || !text.trim()) return null;
 
   const result = await murfProvider.synthesize({
     text,
@@ -83,34 +123,16 @@ async function synthesizeSpeech(text: string): Promise<Buffer | null> {
   return result?.audioBuffer ?? null;
 }
 
-// Pre-synthesised filler clips — generated once at warmup, replayed instantly
-let fillerAudio: Buffer | null = null;
-
 /**
- * Warm up: prime the OpenClaw config + pre-generate a filler TTS clip.
- * Call once at startup so the first real request isn't cold.
+ * Warm up: prime the OpenClaw config so the first real request isn't cold.
  */
 export async function warmup(): Promise<void> {
-  // Prime OpenClaw config by sending a no-op context (loads config, model list, etc.)
-  getReplyFromConfig(
+  logSystem(`LLM: ${ACTIVE_PROVIDER} (${ACTIVE_MODEL})`);
+  await getReplyFromConfig(
     { Body: "ping", SessionKey: "warmup", CommandSource: "native" as const, Provider: "cli" },
     {},
     CONFIG_OVERRIDE,
-  ).catch(() => {}); // fire-and-forget
-
-  // Pre-generate a filler clip
-  try {
-    fillerAudio = await synthesizeSpeech("Let me check on that for you.");
-  } catch {
-    // non-fatal
-  }
-}
-
-/**
- * Return the pre-recorded filler audio buffer (or null if warmup hasn't finished).
- */
-export function getFiller(): Buffer | null {
-  return fillerAudio;
+  ).catch(() => {});
 }
 
 /**
@@ -133,12 +155,10 @@ export async function chat(userText: string): Promise<AgentResponse> {
     },
   }, CONFIG_OVERRIDE);
 
-  // getReplyFromConfig can return a single payload, an array, or undefined
   const payload = Array.isArray(result) ? result[0] : result;
   const text = payload?.text ?? "";
   logAgent(text);
 
-  // Synthesise speech via the Murf OpenClaw plugin
   let audio: Buffer | null = null;
   if (text) {
     try {

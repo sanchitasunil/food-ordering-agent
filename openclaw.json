@@ -13,6 +13,13 @@
       "google": {
         "api": "google-generative-ai",
         "apiKey": "${GEMINI_API_KEY}"
+      },
+      "openrouter": {
+        "apiKey": "${OPENROUTER_API_KEY}"
+      },
+      "opencode-go": {
+        "apiKey": "${OPENCODE_GO_API_KEY}",
+        "baseUrl": "${OPENCODE_GO_BASE_URL}"
       }
     }
   },

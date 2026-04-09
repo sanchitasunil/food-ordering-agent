@@ -36,7 +36,7 @@ export function startListening(onTranscription: TranscriptionCallback): void {
   const url =
     "wss://api.deepgram.com/v1/listen?" +
     "model=nova-2&language=en&smart_format=true&interim_results=true" +
-    "&utterance_end_ms=1000&encoding=linear16&sample_rate=16000&channels=1";
+    "&endpointing=300&encoding=linear16&sample_rate=16000&channels=1";
 
   ws = new WebSocket(url, {
     headers: { Authorization: `Token ${process.env.DEEPGRAM_API_KEY}` },

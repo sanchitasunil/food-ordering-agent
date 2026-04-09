@@ -19,6 +19,10 @@ export function logVoice(text: string): void {
   process.stdout.write(chalk.magenta(`🔊 Speaking: ${text}\n`));
 }
 
+export function logSystem(text: string): void {
+  process.stdout.write(chalk.cyan(`⚡ ${text}\n`));
+}
+
 export function logError(err: unknown): void {
   const message = err instanceof Error ? err.message : String(err);
   process.stderr.write(chalk.red(`❌ Error: ${message}\n`));
