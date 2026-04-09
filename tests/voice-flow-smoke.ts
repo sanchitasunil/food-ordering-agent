@@ -1,13 +1,6 @@
 /**
- * Voice flow smoke test — exercises the brain pipeline (OpenClaw + Swiggy
- * skill + Murf TTS) end-to-end with text input, since the real voice loop
- * needs a microphone we can't drive from a script. Also pings Deepgram's
- * WebSocket to verify auth + reachability without sending audio.
- *
- * Usage: pnpm tsx tests/voice-flow-smoke.ts
- *
- * Saves Murf audio output to test-output-*.wav files at repo root so you
- * can play them back manually to verify the speaker leg.
+ * Smoke test: Deepgram WS + OpenClaw/Swiggy + Murf (text-driven; no mic).
+ * Run: pnpm tsx tests/voice-flow-smoke.ts — writes test-output-*.wav at repo root.
  */
 
 import "dotenv/config";
@@ -25,11 +18,7 @@ import {
 
 const BENGALURU = { lat: 12.9716, lng: 77.5946 };
 
-/**
- * Heuristic: detect responses that "look successful" (non-empty text + valid
- * audio) but actually carry an error string. Without this, the harness will
- * happily report PASS when the LLM call failed and we just TTS'd the error.
- */
+/** Treat common LLM/API error strings as failure so we do not PASS on TTS'd errors. */
 function looksLikeErrorResponse(text: string): boolean {
   const t = text.toLowerCase();
   return (
@@ -37,6 +26,13 @@ function looksLikeErrorResponse(text: string): boolean {
     t.includes("http 5") ||
     t.includes("not a valid model") ||
     t.includes("invalid api key") ||
+    t.includes("api rate limit") ||
+    t.includes("rate limit reached") ||
+    t.includes("rate limit exceeded") ||
+    t.includes("exceeded your current quota") ||
+    t.includes("quota exceeded") ||
+    t.includes("please try again later") ||
+    t.startsWith("⚠️") ||
     t.startsWith("error:") ||
     t.includes("rawerror=")
   );
@@ -92,7 +88,6 @@ async function runOne(sessionKey: string, prompt: string): Promise<RunResult> {
               startedAtMs: performance.now() - start,
             });
           }
-          // Debug: dump full hook payload once per tool
           console.log(
             `    [hook onToolStart] ${JSON.stringify(payload).slice(0, 300)}`,
           );
@@ -105,9 +100,6 @@ async function runOne(sessionKey: string, prompt: string): Promise<RunResult> {
     const payload = Array.isArray(result) ? result[0] : result;
     text = payload?.text ?? "";
 
-    // Debug: if text is empty, dump everything we can see about the result
-    // so we can diagnose whether openclaw returned undefined, an empty
-    // string, or text in a different field. Defensive against undefined.
     if (!text) {
       const resultType =
         result === undefined
@@ -161,8 +153,6 @@ async function runOne(sessionKey: string, prompt: string): Promise<RunResult> {
 
     return {
       prompt,
-      // ok must be REAL: non-empty text, valid audio, AND text doesn't look
-      // like an error string (e.g. "HTTP 400: ... not a valid model id").
       ok:
         text.length > 0 && audio != null && audioRiffValid && !textLooksLikeError,
       text,
@@ -266,7 +256,6 @@ async function main(): Promise<void> {
   console.log("(Mic capture and speaker playback are NOT tested — see report.)");
   console.log(`Active LLM: ${ACTIVE_PROVIDER} → ${ACTIVE_MODEL}`);
 
-  // ── 1. Deepgram WS auth/reachability ──────────────────────────
   hr("[1/5] Deepgram WS auth + reachability");
   const dg = await smokeTestDeepgram();
   if (dg.ok) {
@@ -275,14 +264,12 @@ async function main(): Promise<void> {
     console.log(`  ok=false (after ${dg.ms.toFixed(0)}ms): ${dg.error}`);
   }
 
-  // ── 2. OpenClaw warmup ────────────────────────────────────────
   hr("[2/5] OpenClaw warmup");
   const warmStart = performance.now();
   await warmup();
   const warmMs = performance.now() - warmStart;
   console.log(`  warmup: ${warmMs.toFixed(0)}ms`);
 
-  // ── 3. Standalone Murf TTS ────────────────────────────────────
   hr("[3/5] Standalone Murf TTS");
   const tStart = performance.now();
   const tBuf = await synthesizeSpeech("Hello, this is a Murf TTS smoke test.");
@@ -301,7 +288,6 @@ async function main(): Promise<void> {
     console.log(`  ok=false (no audio after ${tMs.toFixed(0)}ms)`);
   }
 
-  // ── 4. Brain pipeline: simple prompt (1 tool call expected) ───
   hr("[4/5] Brain pipeline — simple prompt");
   const simple = await runOne(
     "voice-test-simple",
@@ -313,7 +299,6 @@ async function main(): Promise<void> {
     console.log(`  → saved reply audio to test-output-simple.wav`);
   }
 
-  // ── 5. Brain pipeline: realistic chained prompt ───────────────
   hr("[5/5] Brain pipeline — realistic chained prompt");
   const chained = await runOne(
     "voice-test-chained",
@@ -325,7 +310,6 @@ async function main(): Promise<void> {
     console.log(`  → saved reply audio to test-output-chained.wav`);
   }
 
-  // ── Summary ───────────────────────────────────────────────────
   hr("Summary");
   console.log(`Deepgram WS:        ${dg.ok ? "PASS" : "FAIL"} (${dg.ms.toFixed(0)}ms)`);
   console.log(`OpenClaw warmup:    ${warmMs.toFixed(0)}ms`);

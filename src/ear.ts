@@ -7,26 +7,21 @@ type TranscriptionCallback = (text: string) => void;
 let soxProcess: ChildProcess | null = null;
 let ws: WebSocket | null = null;
 
-/**
- * Spawn SoX directly with waveaudio input (Windows-compatible).
- */
+/** SoX capture: waveaudio works on Windows; raw PCM to stdout for Deepgram. */
 function startMicCapture(): ChildProcess {
   return spawn("sox", [
-    "-t", "waveaudio", "default",   // Windows audio input
+    "-t", "waveaudio", "default",
     "--no-show-progress",
     "--rate", "16000",
     "--channels", "1",
     "--encoding", "signed-integer",
     "--bits", "16",
     "--type", "raw",
-    "-",                             // pipe to stdout
+    "-",
   ]);
 }
 
-/**
- * Begin streaming mic audio to Deepgram via a raw WebSocket.
- * Calls `onTranscription` with the final transcript of each utterance.
- */
+/** Mic → Deepgram WS; `onTranscription` receives each final utterance only. */
 export function startListening(onTranscription: TranscriptionCallback): void {
   if (!process.env.DEEPGRAM_API_KEY) {
     logError("DEEPGRAM_API_KEY is not set. Add it to your .env file.");
@@ -74,7 +69,7 @@ export function startListening(onTranscription: TranscriptionCallback): void {
         onTranscription(transcript.trim());
       }
     } catch {
-      // ignore non-JSON control frames
+      /* Deepgram may send non-JSON frames */
     }
   });
 
@@ -83,9 +78,6 @@ export function startListening(onTranscription: TranscriptionCallback): void {
   });
 }
 
-/**
- * Stop mic capture and close the Deepgram WebSocket.
- */
 export function stopListening(): void {
   if (soxProcess) {
     soxProcess.kill();
@@ -97,9 +89,7 @@ export function stopListening(): void {
   }
 }
 
-/**
- * Graceful handler for native audio capture failures (e.g. missing SoX on Windows).
- */
+/** Missing SoX on Windows surfaces as ENOENT; user gets install instructions. */
 function handleRecordingError(err: unknown): void {
   const message = err instanceof Error ? err.message : String(err);
   const code = (err as NodeJS.ErrnoException)?.code;

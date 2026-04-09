@@ -11,7 +11,6 @@ import {
   stopThinking,
 } from "./ui.js";
 
-// Pre-generated filler clip — synthesised once at startup
 let fillerAudio: Buffer | null = null;
 
 async function handleTranscription(text: string): Promise<void> {
@@ -19,8 +18,8 @@ async function handleTranscription(text: string): Promise<void> {
   logUser(text);
   startThinking("Processing...");
 
-  // Schedule filler to play only if LLM takes longer than 2s
   let fillerPlaying = false;
+  // Pre-warmed TTS if chat() is still in flight after 2s (cleared when reply returns)
   const fillerTimer = setTimeout(async () => {
     if (fillerAudio) {
       fillerPlaying = true;
@@ -32,7 +31,6 @@ async function handleTranscription(text: string): Promise<void> {
   try {
     const response = await chat(text);
 
-    // Cancel or stop filler — response is ready
     clearTimeout(fillerTimer);
     if (fillerPlaying) stopPlayback();
 
@@ -52,10 +50,8 @@ async function handleTranscription(text: string): Promise<void> {
   startListening(handleTranscription);
 }
 
-// ── Entry point ──────────────────────────────────────────────
 logSystem("Starting up...");
 
-// Warm up OpenClaw + pre-generate filler audio in parallel
 await Promise.all([
   warmup(),
   synthesizeSpeech("Let me check on that for you.").then((buf) => {

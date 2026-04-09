@@ -1,19 +1,9 @@
 #!/usr/bin/env node
 
 /**
- * Swiggy CLI — wrapper for the Swiggy MCP gateway via mcporter (v0.8.x).
- *
- * Currently only the `swiggy-food` server is wired up, matching what's
- * registered in config/mcporter.json. Instamart and Dineout each live on
- * their own MCP servers (https://mcp.swiggy.com/im, /dineout). To enable
- * them, register the servers in config/mcporter.json, run
- * `mcporter auth swiggy-instamart` / `mcporter auth swiggy-dineout`, then
- * introspect their schemas with `mcporter list <server> --schema` and add
- * dispatch cases below — never guess tool names.
- *
- * Workflow note: nearly every food tool requires an `addressId` from the
- * authenticated user's saved addresses. Run `swiggy food addresses` first
- * to see them, then pass `--address-id <id>` to every other command.
+ * Swiggy food MCP via mcporter (see config/mcporter.json). Other Swiggy MCP
+ * servers need registering + auth before adding dispatch here. Most commands
+ * need --address-id from `swiggy food addresses`.
  */
 
 const { spawnSync } = require('child_process');
@@ -22,13 +12,8 @@ const SERVER = 'swiggy-food';
 const isWindows = process.platform === 'win32';
 
 /**
- * Invoke an mcporter tool. Always uses the `--args '<json>'` form so
- * scalar and structured payloads (e.g. update_food_cart's cartItems
- * array) take the same code path. Quoting is platform-aware:
- *   - bash:    single-quoted JSON, preserved literally
- *   - cmd.exe: double-quoted JSON with internal `"` escaped as `""`
- * This avoids the original CLI's bug where single-quoted JSON was
- * stripped by PowerShell/cmd.exe before mcporter ever saw it.
+ * mcporter call with --args JSON. Windows: double-quote + escape ""; Unix:
+ * single-quote — avoids cmd/PowerShell eating quotes before mcporter runs.
  */
 function callMCP(tool, args = {}) {
   const selector = `${SERVER}.${tool}`;
