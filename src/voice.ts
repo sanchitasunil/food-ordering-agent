@@ -12,8 +12,8 @@ function repairWav(buf: Buffer): Buffer {
   if (buf.toString("ascii", 0, 4) !== "RIFF") return buf;
   if (buf.toString("ascii", 8, 12) !== "WAVE") return buf;
 
-  const leadSilence = Buffer.alloc(7200); // 24kHz × 2 bytes × 0.15s
-  const tailSilence = Buffer.alloc(9600); // 24kHz × 2 bytes × 0.2s
+  const leadSilence = Buffer.alloc(7200);  // 24kHz × 2 bytes × 0.15s
+  const tailSilence = Buffer.alloc(24000); // 24kHz × 2 bytes × 0.5s
 
   const header = buf.subarray(0, 44);
   const audioData = buf.subarray(44);

@@ -270,7 +270,7 @@ async function main(): Promise<void> {
   const warmMs = performance.now() - warmStart;
   console.log(`  warmup: ${warmMs.toFixed(0)}ms`);
 
-  hr("[3/5] Standalone Murf TTS");
+  hr("[3/6] Standalone Murf TTS — short text");
   const tStart = performance.now();
   const tBuf = await synthesizeSpeech("Hello, this is a Murf TTS smoke test.");
   const tMs = performance.now() - tStart;
@@ -288,7 +288,51 @@ async function main(): Promise<void> {
     console.log(`  ok=false (no audio after ${tMs.toFixed(0)}ms)`);
   }
 
-  hr("[4/5] Brain pipeline — simple prompt");
+  hr("[4/6] Standalone Murf TTS — long text (chunking + WAV concat)");
+  // Build a >8000-char passage so synthesizeSpeech is forced to chunk into
+  // at least 3 pieces (Murf plugin caps each request at 4000 chars; brain.ts
+  // budgets 3800 to leave headroom for the plugin's stripControlChars pass).
+  const sentence =
+    "This is a deliberately long passage designed to verify that the brain " +
+    "layer correctly chunks text on sentence boundaries, synthesizes each " +
+    "chunk through Murf separately, and stitches the resulting WAV buffers " +
+    "into a single playable file. ";
+  const longText = sentence.repeat(40); // ~12000 chars → ~3 chunks
+  console.log(`  input: ${longText.length} chars`);
+  const lStart = performance.now();
+  let lBuf: Buffer | null = null;
+  let lErr: string | undefined;
+  try {
+    lBuf = await synthesizeSpeech(longText);
+  } catch (err) {
+    lErr = err instanceof Error ? err.message : String(err);
+  }
+  const lMs = performance.now() - lStart;
+  if (lBuf) {
+    const valid =
+      lBuf.length > 44 &&
+      lBuf.toString("ascii", 0, 4) === "RIFF" &&
+      lBuf.toString("ascii", 8, 12) === "WAVE";
+    // Read the data sub-chunk size from the merged header to verify the
+    // RIFF/data size patches landed correctly.
+    let dataSize = -1;
+    for (let i = 12; i < lBuf.length - 8; i++) {
+      if (lBuf.toString("ascii", i, i + 4) === "data") {
+        dataSize = lBuf.readUInt32LE(i + 4);
+        break;
+      }
+    }
+    console.log(
+      `  ok=true (${lBuf.length} bytes, RIFF/WAVE=${valid}, data chunk=${dataSize} bytes, ${lMs.toFixed(0)}ms)`,
+    );
+    await writeFile("test-output-tts-long.wav", lBuf);
+    console.log(`  → saved to test-output-tts-long.wav`);
+  } else {
+    console.log(`  ok=false (no audio after ${lMs.toFixed(0)}ms)`);
+    if (lErr) console.log(`  ERROR: ${lErr}`);
+  }
+
+  hr("[5/6] Brain pipeline — simple prompt");
   const simple = await runOne(
     "voice-test-simple",
     "What delivery addresses do I have saved on Swiggy?",
@@ -299,7 +343,7 @@ async function main(): Promise<void> {
     console.log(`  → saved reply audio to test-output-simple.wav`);
   }
 
-  hr("[5/5] Brain pipeline — realistic chained prompt");
+  hr("[6/6] Brain pipeline — realistic chained prompt");
   const chained = await runOne(
     "voice-test-chained",
     "Find me biryani restaurants near home and tell me the top two.",
@@ -314,6 +358,9 @@ async function main(): Promise<void> {
   console.log(`Deepgram WS:        ${dg.ok ? "PASS" : "FAIL"} (${dg.ms.toFixed(0)}ms)`);
   console.log(`OpenClaw warmup:    ${warmMs.toFixed(0)}ms`);
   console.log(`Standalone Murf:    ${tBuf ? "PASS" : "FAIL"} (${tMs.toFixed(0)}ms)`);
+  console.log(
+    `Long-text Murf:     ${lBuf ? "PASS" : "FAIL"} (${lMs.toFixed(0)}ms, ${longText.length} chars in)`,
+  );
   console.log(
     `Simple chat:        ${simple.ok ? "PASS" : "FAIL"} (agent ${simple.agentMs.toFixed(0)}ms + tts ${simple.ttsMs.toFixed(0)}ms = ${simple.totalMs.toFixed(0)}ms, ${simple.toolEvents.length} tool calls)`,
   );

@@ -11,14 +11,15 @@ servers in `config/mcporter.json` and are not yet supported.
 
 ## Installation
 
-The skill ships a `swiggy` CLI binary. After installing the skill:
+The skill CLI lives at `skills/swiggy/swiggy-cli.js`. Run it via:
 
 ```bash
-cd skills/swiggy
-npm link
+node skills/swiggy/swiggy-cli.js food <command> [args]
 ```
 
-This creates a global `swiggy` command. Verify with: `which swiggy`
+Do NOT rely on a global `swiggy` binary — OpenClaw's shell executor may not
+have npm globals on PATH. Always use the full `node skills/swiggy/swiggy-cli.js`
+invocation.
 
 One-time auth (interactive, opens a browser):
 
@@ -32,7 +33,7 @@ mcporter auth swiggy-food
 of the user's saved Swiggy delivery addresses. There is no free-form location
 parameter. The workflow is:
 
-1. Call `swiggy food addresses` to fetch the user's saved addresses.
+1. Call `node skills/swiggy/swiggy-cli.js food addresses` to fetch the user's saved addresses.
 2. If the list is empty, tell the user to add a delivery address in the Swiggy
    mobile app and stop. Do not invent an addressId.
 3. If there's exactly one address, use it.
@@ -51,27 +52,27 @@ parameter. The workflow is:
 
 ```bash
 # Address discovery (ALWAYS run first if you don't have an addressId)
-swiggy food addresses
+node skills/swiggy/swiggy-cli.js food addresses
 
 # Restaurants & menus
-swiggy food search "<query>" --address-id <id>
-swiggy food menu <restaurant-id> --address-id <id> [--page <n>] [--page-size <n>]
-swiggy food dishes "<query>" --address-id <id> [--restaurant <id>] [--veg]
+node skills/swiggy/swiggy-cli.js food search "<query>" --address-id <id>
+node skills/swiggy/swiggy-cli.js food menu <restaurant-id> --address-id <id> [--page <n>] [--page-size <n>]
+node skills/swiggy/swiggy-cli.js food dishes "<query>" --address-id <id> [--restaurant <id>] [--veg]
 
 # Cart
-swiggy food cart --address-id <id>
-swiggy food cart-add --restaurant <id> --address-id <id> --item <menu-item-id> [--quantity <n>]
-swiggy food cart-clear
+node skills/swiggy/swiggy-cli.js food cart --address-id <id>
+node skills/swiggy/swiggy-cli.js food cart-add --restaurant <id> --address-id <id> --item <menu-item-id> [--quantity <n>]
+node skills/swiggy/swiggy-cli.js food cart-clear
 
 # Coupons
-swiggy food coupons --restaurant <id> --address-id <id> [--code <code>]
-swiggy food apply-coupon --code <code> --address-id <id>
+node skills/swiggy/swiggy-cli.js food coupons --restaurant <id> --address-id <id> [--code <code>]
+node skills/swiggy/swiggy-cli.js food apply-coupon --code <code> --address-id <id>
 
 # Order placement & tracking
-swiggy food order --address-id <id> --confirm [--payment <method>]
-swiggy food orders --address-id <id> [--count <n>]
-swiggy food order-details <orderId>
-swiggy food track [<orderId>]
+node skills/swiggy/swiggy-cli.js food order --address-id <id> --confirm [--payment <method>]
+node skills/swiggy/swiggy-cli.js food orders --address-id <id> [--count <n>]
+node skills/swiggy/swiggy-cli.js food order-details <orderId>
+node skills/swiggy/swiggy-cli.js food track [<orderId>]
 ```
 
 ## Item selection rules
@@ -94,7 +95,7 @@ swiggy food track [<orderId>]
 ### NEVER auto-order
 **ALWAYS get explicit confirmation before placing orders.**
 
-1. Show a cart preview first (`swiggy food cart --address-id <id>`):
+1. Show a cart preview first (`node skills/swiggy/swiggy-cli.js food cart --address-id <id>`):
    - All items with quantities and prices
    - Subtotal, delivery, taxes, and `to_pay` total
    - Delivery address (full address from `get_addresses`)
@@ -112,7 +113,7 @@ swiggy food track [<orderId>]
    ```
 
 3. Only after the user clearly says yes:
-   - Run `swiggy food order --address-id <id> --confirm`
+   - Run `node skills/swiggy/swiggy-cli.js food order --address-id <id> --confirm`
    - Optionally log to `memory/swiggy-orders.json`
 
 ### COD-only and ₹1000 cap
@@ -130,43 +131,43 @@ swiggy food track [<orderId>]
 
 ```bash
 # 1. Get addressId
-swiggy food addresses
+node skills/swiggy/swiggy-cli.js food addresses
 # → user has address d7bo18tdmtl1u1bd1kng (Electronic City)
 
 # 2. Search restaurants
-swiggy food search "biryani" --address-id d7bo18tdmtl1u1bd1kng
+node skills/swiggy/swiggy-cli.js food search "biryani" --address-id d7bo18tdmtl1u1bd1kng
 # → Meghana Foods (id 86358), OPEN
 
 # 3. Browse menu (compact) to find an item
-swiggy food menu 86358 --address-id d7bo18tdmtl1u1bd1kng
+node skills/swiggy/swiggy-cli.js food menu 86358 --address-id d7bo18tdmtl1u1bd1kng
 
 # 4. Get full item details (gives menu_item_id)
-swiggy food dishes "pepper chicken" --address-id d7bo18tdmtl1u1bd1kng --restaurant 86358
+node skills/swiggy/swiggy-cli.js food dishes "pepper chicken" --address-id d7bo18tdmtl1u1bd1kng --restaurant 86358
 # → Pepper Chicken, menu_item_id 24794114, hasVariants false, hasAddons false
 
 # 5. Add to cart
-swiggy food cart-add --restaurant 86358 --address-id d7bo18tdmtl1u1bd1kng --item 24794114 --quantity 1
+node skills/swiggy/swiggy-cli.js food cart-add --restaurant 86358 --address-id d7bo18tdmtl1u1bd1kng --item 24794114 --quantity 1
 
 # 6. Preview cart and read to user
-swiggy food cart --address-id d7bo18tdmtl1u1bd1kng
+node skills/swiggy/swiggy-cli.js food cart --address-id d7bo18tdmtl1u1bd1kng
 
 # 7. Get explicit user confirmation, then place order
-swiggy food order --address-id d7bo18tdmtl1u1bd1kng --confirm
+node skills/swiggy/swiggy-cli.js food order --address-id d7bo18tdmtl1u1bd1kng --confirm
 ```
 
 ### Order tracking
 
 ```bash
-swiggy food track
+node skills/swiggy/swiggy-cli.js food track
 # → all active orders, or "No active orders to track"
 ```
 
 ### Browsing without committing
 
 ```bash
-swiggy food search "pizza" --address-id <id>
-swiggy food menu <restaurantId> --address-id <id> --page 1 --page-size 8
-swiggy food dishes "margherita" --address-id <id> --restaurant <restaurantId>
+node skills/swiggy/swiggy-cli.js food search "pizza" --address-id <id>
+node skills/swiggy/swiggy-cli.js food menu <restaurantId> --address-id <id> --page 1 --page-size 8
+node skills/swiggy/swiggy-cli.js food dishes "margherita" --address-id <id> --restaurant <restaurantId>
 ```
 
 ## Error handling

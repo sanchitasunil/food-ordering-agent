@@ -17,14 +17,19 @@
       "openrouter": {
         "apiKey": "${OPENROUTER_API_KEY}"
       },
-      "opencode": {
-        "apiKey": "${OPENCODE_API_KEY}"
-      }
+      "opencode": {},
+      "opencode-go": {}
     }
   },
   "skills": {
     "load": {
       "extraDirs": ["./skills"]
+    }
+  },
+  "plugins": {
+    "entries": {
+      "murf": { "enabled": false },
+      "murf-tts": { "enabled": false }
     }
   }
 }
