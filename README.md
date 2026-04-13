@@ -1,101 +1,225 @@
-# AI Food Ordering Agent
+# food-ordering-agent
 
-Voice-driven food ordering CLI. Speaks into your mic, streams real-time STT via **Deepgram Nova-2**, routes intent through an **OpenClaw** agentic LLM with a **Swiggy ClawHub** skill, and reads back results using **Murf** high-fidelity TTS.
+A voice-driven food ordering CLI that chains real-time speech recognition, an agentic LLM with tool calling, live Swiggy restaurant data, and high-fidelity text-to-speech into a conversational loop. Talk to your terminal, get food delivered.
 
 ```
-You (mic) ➜ Deepgram STT ➜ OpenClaw Agent ➜ Swiggy Tool ➜ Murf TTS ➜ Speakers
+mic  -->  Deepgram STT  -->  OpenClaw Agent  -->  Swiggy MCP  -->  Murf TTS  -->  speakers
+          (nova-2)           (Gemini/OpenRouter    (live menu,      (en-IN-anisha,
+                              /OpenCode)            cart, orders)    FALCON model)
 ```
 
-## Prerequisites
+https://github.com/user-attachments/assets/placeholder-demo-video
 
-| Requirement | Why | Install |
-|---|---|---|
-| **Node.js 22+** | Runtime. ESM-only codebase. | [nodejs.org](https://nodejs.org/) |
-| **pnpm** | Package manager. | `npm i -g pnpm` |
-| **SoX (Sound eXchange)** | `node-record-lpcm16` shells out to `sox` for mic capture. **Without it, recording will fail on Windows with `spawn sox ENOENT`.** | [SourceForge download](https://sourceforge.net/projects/sox/). After install, add the SoX directory to your system `PATH`. Verify: `sox --version`. On macOS: `brew install sox`. On Ubuntu: `apt install sox`. |
+## What it does
 
-## Setup
+1. Listens to your voice via SoX and streams audio to Deepgram Nova-2 for real-time transcription.
+2. Sends the transcript to an OpenClaw agent backed by a configurable LLM (Gemini, OpenRouter, or OpenCode).
+3. The agent calls Swiggy's live MCP servers to search restaurants, browse menus, manage a cart, and place orders — all via voice.
+4. Reads the response back through Murf FALCON TTS with an Indian English voice.
+5. Loops. The whole thing feels like talking to a friend who happens to have Swiggy open.
 
-### 1. Clone & install
+## Quick start
 
 ```bash
 git clone <repo-url> food-ordering-agent
 cd food-ordering-agent
 pnpm install
-```
-
-### 2. Configure environment variables
-
-```bash
-cp .env.example .env
-```
-
-Open `.env` and fill in your keys:
-
-| Variable | Where to get it |
-|---|---|
-| `DEEPGRAM_API_KEY` | [console.deepgram.com](https://console.deepgram.com/) — create a project, generate an API key with STT permissions. |
-| `MURF_API_KEY` | [murf.ai](https://murf.ai/) — sign up, go to API settings, copy your key. |
-| `GEMINI_API_KEY` | Required by OpenClaw's underlying LLM router. Get it from [aistudio.google.dev/apikey](https://aistudio.google.dev/apikey). |
-| `SWIGGY_API_KEY` | Only if Swiggy ClawHub requires auth. Check ClawHub docs for your skill config. |
-
-### 3. Verify SoX (Windows users)
-
-```bash
-sox --version
-```
-
-If this prints a version string, you're good. If it says `'sox' is not recognized`, SoX is not in your PATH. Fix that before running the agent.
-
-## Running the Agent
-
-```bash
+cp .env.example .env   # fill in your API keys (see below)
 pnpm start
 ```
 
-This runs `tsx src/index.ts`. The agent will:
+> Try saying: *"I feel like having garlic bread"*
 
-1. Open your microphone and begin streaming audio to Deepgram.
-2. Wait for you to speak. Try something like:
+**Heads up:** The first response takes 15-50 seconds (OpenClaw cold-starts the LLM + loads skills). Subsequent responses are much faster (7-20s). The agent uses your **saved Swiggy delivery address**, not live GPS — make sure you have at least one address saved in the Swiggy app.
 
-   > "I'm starving, find me a masala dosa nearby."
+## Prerequisites
 
-3. Mute the mic, send your transcript to the OpenClaw agent.
-4. The agent calls the Swiggy tool (searches Bengaluru by default), reads back the top 2 options, and asks clarifying questions (spice level, restaurant preference).
-5. Speak the response through your speakers via Murf TTS.
-6. Un-mute the mic and loop.
+| What | Why | How |
+|---|---|---|
+| Node.js 22+ | Runtime (ESM-only) | [nodejs.org](https://nodejs.org/) |
+| pnpm | Package manager | `npm i -g pnpm` |
+| SoX | Mic capture + audio playback | Windows: [SourceForge](https://sourceforge.net/projects/sox/), add to PATH. macOS: `brew install sox`. Linux: `apt install sox` |
 
-Press `Ctrl+C` to exit.
+Verify SoX is on PATH: `sox --version`
+
+## API keys
+
+Fill these in your `.env` after copying `.env.example`:
+
+| Key | Where to get it |
+|---|---|
+| `DEEPGRAM_API_KEY` | [console.deepgram.com](https://console.deepgram.com/) |
+| `MURF_API_KEY` | [murf.ai](https://murf.ai/) > API settings |
+| `GEMINI_API_KEY` | [aistudio.google.dev/apikey](https://aistudio.google.dev/apikey) |
+
+Optional (for provider failover):
+
+| Key | When you need it |
+|---|---|
+| `OPENROUTER_API_KEY` | When `LLM_PROVIDER=openrouter` |
+| `OPENCODE_API_KEY` | When `LLM_PROVIDER=opencode` — sign up at [opencode.ai](https://opencode.ai/auth) |
+
+### Swiggy auth (one-time)
+
+The agent orders food through Swiggy's MCP servers, which use OAuth. Run once:
+
+```bash
+mcporter auth swiggy-food
+```
+
+This opens a browser for Swiggy login. On Windows, mcporter has a URL-truncation bug — if the browser shows a `client_id required` error, copy the full URL from the terminal's debug output and paste it manually. See [Troubleshooting](#troubleshooting) for details.
+
+## LLM provider switching
+
+Three LLM backends are preconfigured. Switch between them by editing one line in `.env` — no code changes, no rebuild:
+
+```bash
+LLM_PROVIDER=gemini       # Google Gemini 2.5 Flash (default)
+LLM_PROVIDER=openrouter   # Google Gemma 4 31B via OpenRouter (free)
+LLM_PROVIDER=opencode     # Big Pickle via OpenCode Zen (free)
+```
+
+Override the model on any provider:
+```bash
+LLM_MODEL=opencode/minimax-m2.5-free
+```
+
+The startup banner shows which provider and model are active.
+
+## How it works
+
+### Architecture
+
+```
+src/
+  index.ts    Event loop: mic → transcribe → think → speak → repeat
+  ear.ts      SoX mic capture + Deepgram WebSocket streaming
+  brain.ts    OpenClaw agent config, LLM routing, Murf TTS synthesis
+  voice.ts    WAV repair + SoX playback
+  ui.ts       Terminal rendering (chalk + ora + boxen)
+
+workspace/
+  IDENTITY.md   System prompt (voice brevity rules, tool sequencing)
+
+skills/swiggy/
+  SKILL.md        Tool documentation the LLM reads to learn the CLI
+  swiggy-cli.js   CLI wrapper around Swiggy's MCP servers via mcporter
+
+config/
+  mcporter.json   Swiggy MCP server registration + OAuth config
+```
+
+### Voice loop
+
+```
+                    ┌─────────────────────────────────────┐
+                    │                                     │
+  mic ──► SoX ──► Deepgram WS ──► transcript             │
+                                      │                   │
+                                      ▼                   │
+                               OpenClaw Agent             │
+                               (Gemini / etc)             │
+                                      │                   │
+                            ┌─────────┴─────────┐        │
+                            │ tool calls?        │        │
+                            │  swiggy-cli.js     │        │
+                            │  via mcporter      │        │
+                            └─────────┬─────────┘        │
+                                      │                   │
+                                      ▼                   │
+                               Agent reply                │
+                                      │                   │
+                                      ▼                   │
+                               Murf TTS ──► SoX ──► speakers
+                                      │                   │
+                                      └───────────────────┘
+```
+
+### TTS chunking
+
+Murf's FALCON API caps each request at 3000 characters and synthesizes at ~35ms per character. The agent automatically:
+
+1. Splits long replies on sentence boundaries (1500-char chunks)
+2. Synthesizes each chunk independently
+3. Concatenates the WAV buffers and patches the RIFF headers
+
+Short replies (~100 chars) synthesize in ~2-3 seconds. The system prompt enforces a 400-character default to keep voice responses snappy.
+
+### Terminal UI
+
+The terminal is designed to be legible in demo videos:
+
+```
+╭──────────────────────────────────────────────────╮
+│                                                  │
+│   food-ordering-agent                            │
+│   voice → LLM → tools → voice                    │
+│                                                  │
+│   STT     deepgram nova-2                        │
+│   LLM     gemini  ›  google/gemini-2.5-flash     │
+│   TTS     murf falcon  ›  en-IN-anisha           │
+│   Skill   swiggy-food                            │
+│                                                  │
+╰──────────────────────────────────────────────────╯
+✔ Ready (3.2s)
+──────────────────────────────────────────────────────────────
+🤖 Agent    Hi, I'm your food ordering assistant. How can I help you today?
+🔊 Speaking Hi, I'm your food ordering assistant. How can I help you today?
+⚡ System    Speak when you're ready.
+──────────────────────────────────────────────────────────────
+🎤 You      I feel like having garlic bread.
+🔧 Tool     swiggy
+🔧 Tool     exec
+🤖 Agent    Two places near you: La Pino'z Pizza, about 31 minutes. Pizza Hut, 37 minutes.
+            ⏱  LLM 14.2s · 2 tools · TTS 3.1s · 89 chars
+🔊 Speaking Two places near you: La Pino'z Pizza, about 31 minutes...
+```
+
+Color scheme: blue = user, yellow = agent, green = tools, magenta = TTS, cyan = system.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `Error: spawn sox ENOENT` | SoX is not installed or not in PATH. | Install SoX and add its directory to your system PATH. Restart your terminal after updating PATH. |
-| `Microphone access failed. Windows requires SoX...` | Same root cause — the agent caught it gracefully. | Same fix as above. |
-| No audio output / silence after agent reply | Murf API key is missing or invalid, or system volume is muted. | Verify `MURF_API_KEY` in `.env`. Check your OS volume mixer — make sure Node.js / your terminal is not muted. |
-| Deepgram returns empty transcripts | API key invalid or mic not capturing audio. | Test your mic in another app. Verify `DEEPGRAM_API_KEY`. Check your firewall isn't blocking WebSocket connections to `api.deepgram.com`. |
-| Swiggy API returning empty results | Coordinates may be wrong, or the skill isn't registered. | The agent defaults to Bengaluru (12.9716, 77.5946). If you need a different city, update the coordinates in `src/brain.ts`. |
-| `ERR_MODULE_NOT_FOUND` | Dependencies not installed. | Run `pnpm install`. |
+| `spawn sox ENOENT` | SoX not installed or not on PATH | Install SoX, add to PATH, restart terminal |
+| No audio output after agent reply | Murf API key missing/invalid, or system volume muted | Check `MURF_API_KEY` in `.env`. Check OS volume mixer |
+| Deepgram WS closed (code=1011) | Free Deepgram credits exhausted | Top up at [console.deepgram.com](https://console.deepgram.com) |
+| `client_id and redirect_uri are required` during mcporter auth | mcporter URL-truncation bug on Windows | Run `mcporter --log-level debug auth swiggy-food --reset`, copy the full URL from the log output, paste into browser manually |
+| Agent says "swiggy command not found" | OpenClaw's executor doesn't have npm globals on PATH | Already fixed — the skill uses `node skills/swiggy/swiggy-cli.js` directly. If you see this, make sure `workspace/skills/swiggy/SKILL.md` matches `skills/swiggy/SKILL.md` |
+| First response is slow (~15-50s) | OpenClaw cold-starts on the first real query (loads skills, resolves config, initializes provider) | Subsequent responses are faster (7-20s). The warmup runs in parallel with startup audio but may not finish in time |
+| `LLM call timed out after 180s` | Provider is down, misconfigured, or rate-limited | Switch `LLM_PROVIDER` in `.env` to a different backend |
+| Agent returns error strings as speech | LLM provider returned an error that OpenClaw surfaced as text | Check the terminal for the actual error message. Usually a billing/quota issue |
+| Audio gets cut off at the end | Tail silence too short for SoX | Increase `tailSilence` in `src/voice.ts` (currently 0.5s) |
 
-## Architecture
+## Project structure
 
 ```
-├── openclaw.json           # OpenClaw config (model, provider, skill dirs)
-├── workspace/
-│   └── IDENTITY.md         # System prompt (injected by OpenClaw)
-├── skills/
-│   └── swiggy/
-│       └── SKILL.md        # Swiggy food search skill definition
-└── src/
-    ├── index.ts            # Mute-while-talking event loop orchestrator
-    ├── ear.ts              # Mic capture (node-record-lpcm16) + Deepgram STT streaming
-    ├── brain.ts            # OpenClaw getReplyFromConfig + Murf TTS synthesis
-    ├── voice.ts            # Plays audio via PowerShell (no native addons)
-    └── ui.ts               # All terminal output (chalk + ora). Color scheme:
-                            #   Blue = user, Yellow = agent, Green = tool, Purple = TTS
+.env.example          Environment variable template
+openclaw.json         OpenClaw config (model, providers, skills, plugin overrides)
+package.json          Dependencies (openclaw, deepgram, murf-tts, chalk, ora, boxen, ws)
+tsconfig.json         TypeScript config
+config/
+  mcporter.json       Swiggy MCP server registration
+workspace/
+  IDENTITY.md         System prompt
+  AGENTS.md           OpenClaw agent framework docs
+  skills/swiggy/      Workspace copy of the Swiggy skill (synced with skills/)
+skills/swiggy/
+  SKILL.md            Tool reference the LLM reads
+  swiggy-cli.js       CLI wrapper — mcporter calls to Swiggy MCP
+  package.json        Skill metadata
+src/
+  index.ts            Entry point + event loop
+  ear.ts              Mic capture + Deepgram STT
+  brain.ts            LLM routing + TTS synthesis + chunking
+  voice.ts            WAV repair + SoX playback
+  ui.ts               Terminal rendering
+tests/
+  voice-flow-smoke.ts Full pipeline smoke test (text-driven, no mic)
+  murf-chunking-smoke.ts  Isolated TTS chunking + WAV concat test
+  ui-demo.ts          Visual UI smoke test (no network)
 ```
 
-## License
+## Credits
 
-Private.
+Built with [OpenClaw](https://openclaw.kr), [Deepgram](https://deepgram.com), [Murf](https://murf.ai), and [Swiggy MCP](https://mcp.swiggy.com).

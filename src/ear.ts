@@ -8,14 +8,10 @@ let soxProcess: ChildProcess | null = null;
 let ws: WebSocket | null = null;
 
 /**
- * Tear down any existing SoX process and Deepgram WebSocket. Safe to call
- * at any time — idempotent, removes all listeners before killing so we
- * don't leak EventEmitter handles across start/stop cycles.
+ * Tear down any existing SoX process and Deepgram WebSocket.
  */
 export function stopListening(): void {
   if (soxProcess) {
-    // Remove all listeners BEFORE kill so the error/close events from the
-    // dying process don't trigger handleRecordingError() or accumulate.
     soxProcess.removeAllListeners();
     soxProcess.stdout?.removeAllListeners();
     soxProcess.stderr?.removeAllListeners();
@@ -31,7 +27,6 @@ export function stopListening(): void {
   }
 }
 
-/** SoX capture: waveaudio works on Windows; raw PCM to stdout for Deepgram. */
 function startMicCapture(): ChildProcess {
   return spawn("sox", [
     "-t", "waveaudio", "default",
@@ -46,14 +41,13 @@ function startMicCapture(): ChildProcess {
 }
 
 /**
- * Begin streaming mic audio to Deepgram via a raw WebSocket.
- * Calls `onTranscription` with the final transcript of each utterance.
- *
- * Always call stopListening() before calling this again — otherwise the
- * previous SoX/WS pair is leaked and you'll hit MaxListeners.
+ * Open Deepgram WS, spawn SoX, stream mic audio. Calls onReady() when
+ * the first audio chunk reaches Deepgram (mic is genuinely hot).
  */
-export function startListening(onTranscription: TranscriptionCallback): void {
-  // Defensive: tear down any lingering session before opening a new one.
+export function startListening(
+  onTranscription: TranscriptionCallback,
+  opts?: { quiet?: boolean; onReady?: () => void },
+): void {
   stopListening();
 
   if (!process.env.DEEPGRAM_API_KEY) {
@@ -61,54 +55,49 @@ export function startListening(onTranscription: TranscriptionCallback): void {
     return;
   }
 
+  const quiet = opts?.quiet ?? false;
+  const onReady = opts?.onReady;
+
   const url =
     "wss://api.deepgram.com/v1/listen?" +
     "model=nova-2&language=en&smart_format=true&interim_results=true" +
     "&endpointing=300&encoding=linear16&sample_rate=16000&channels=1";
 
-  logSystem("Connecting to Deepgram…");
+  if (!quiet) logSystem("Connecting to Deepgram…");
 
   ws = new WebSocket(url, {
     headers: { Authorization: `Token ${process.env.DEEPGRAM_API_KEY}` },
   });
 
   ws.on("open", () => {
-    logSystem("Deepgram connected — starting mic capture…");
+    if (!quiet) logSystem("Deepgram connected — starting mic capture…");
     try {
       soxProcess = startMicCapture();
 
-      soxProcess.on("error", (err: Error) => {
-        handleRecordingError(err);
-      });
+      soxProcess.on("error", (err: Error) => handleRecordingError(err));
 
-      let audioBytesSent = 0;
+      let firstChunk = true;
       soxProcess.stdout!.on("data", (chunk: Buffer) => {
         if (ws?.readyState === WebSocket.OPEN) {
           ws.send(chunk);
-          audioBytesSent += chunk.length;
-          // Log once after the first chunk so we know audio is flowing.
-          if (audioBytesSent === chunk.length) {
-            logSystem("Mic active — streaming audio to Deepgram.");
+          if (firstChunk) {
+            firstChunk = false;
+            if (!quiet) logSystem("Mic active — streaming audio to Deepgram.");
+            onReady?.();
           }
         }
       });
 
-      // SoX writes informational messages to stderr (e.g. "processing...")
-      // that are NOT errors. Only escalate to handleRecordingError if the
-      // message looks like an actual failure. Otherwise the mic gets killed
-      // on the first benign stderr line.
       soxProcess.stderr!.on("data", (data: Buffer) => {
         const msg = data.toString().trim();
         if (!msg) return;
-        const isRealError =
-          /error|fail|cannot|denied|not found|ENOENT/i.test(msg);
-        if (isRealError) handleRecordingError(new Error(msg));
+        if (/error|fail|cannot|denied|not found|ENOENT/i.test(msg)) {
+          handleRecordingError(new Error(msg));
+        }
       });
 
       soxProcess.on("close", (code) => {
-        if (code && code !== 0) {
-          logError(`SoX exited with code ${code}`);
-        }
+        if (code && code !== 0) logError(`SoX exited with code ${code}`);
       });
     } catch (err: unknown) {
       handleRecordingError(err);
@@ -118,45 +107,29 @@ export function startListening(onTranscription: TranscriptionCallback): void {
   ws.on("message", (raw: Buffer) => {
     try {
       const data = JSON.parse(raw.toString());
-
-      // Deepgram sends error frames before closing — surface them.
       if (data.type === "Error" || data.error) {
-        logError(
-          `Deepgram: ${data.message || data.error || JSON.stringify(data).slice(0, 200)}`,
-        );
+        logError(`Deepgram: ${data.message || data.error || JSON.stringify(data).slice(0, 200)}`);
         return;
       }
-
-      const transcript: string =
-        data.channel?.alternatives?.[0]?.transcript ?? "";
+      const transcript: string = data.channel?.alternatives?.[0]?.transcript ?? "";
       if (transcript.trim().length > 0 && data.is_final) {
         onTranscription(transcript.trim());
       }
     } catch {
-      // Deepgram may send non-JSON control frames
+      // non-JSON control frames
     }
   });
 
-  ws.on("error", (err: Error) => {
-    logError(`Deepgram WS error: ${err.message}`);
-  });
+  ws.on("error", (err: Error) => logError(`Deepgram WS error: ${err.message}`));
 
   ws.on("close", (code, reason) => {
     const reasonStr = reason?.toString().trim();
-    logSystem(
-      `Deepgram WS closed (code=${code}${reasonStr ? `, reason=${reasonStr}` : ""}).`,
-    );
-    if (code === 1011) {
-      logError(
-        "Deepgram closed with 1011 (internal error). This usually means " +
-          "your free credits are exhausted or the API key lacks streaming scope. " +
-          "Check your balance at https://console.deepgram.com and top up if needed.",
-      );
+    if (!quiet) {
+      logSystem(`Deepgram WS closed (code=${code}${reasonStr ? `, reason=${reasonStr}` : ""}).`);
     }
   });
 }
 
-/** Missing SoX on Windows surfaces as ENOENT; user gets install instructions. */
 function handleRecordingError(err: unknown): void {
   const message = err instanceof Error ? err.message : String(err);
   const code = (err as NodeJS.ErrnoException)?.code;

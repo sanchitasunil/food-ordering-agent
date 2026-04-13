@@ -12,7 +12,7 @@ function repairWav(buf: Buffer): Buffer {
   if (buf.toString("ascii", 0, 4) !== "RIFF") return buf;
   if (buf.toString("ascii", 8, 12) !== "WAVE") return buf;
 
-  const leadSilence = Buffer.alloc(7200);  // 24kHz × 2 bytes × 0.15s
+  const leadSilence = Buffer.alloc(48000); // 24kHz × 2 bytes × 1.0s
   const tailSilence = Buffer.alloc(24000); // 24kHz × 2 bytes × 0.5s
 
   const header = buf.subarray(0, 44);
@@ -39,7 +39,7 @@ export async function playAudio(buffer: Buffer): Promise<void> {
 
   try {
     await new Promise<void>((resolve, reject) => {
-      const proc = spawn("sox", [tmpPath, "-t", "waveaudio", "default"], {
+      const proc = spawn("sox", ["-q", tmpPath, "-t", "waveaudio", "default"], {
         stdio: "ignore",
       });
       currentProcess = proc;

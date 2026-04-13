@@ -7,6 +7,28 @@ import { logTool, logAgent, logSystem, logTimings } from "./ui.js";
 // Local openclaw.json instead of ~/.openclaw/
 process.env.OPENCLAW_CONFIG_PATH ??= resolve("openclaw.json");
 
+// ── Suppress noisy openclaw stderr ───────────────────────────────
+// Openclaw prints "Config warnings", "diagnostic", and ANSI-colored
+// "[agent]" lines to stderr on every LLM call. These pollute the
+// terminal and confuse users. Intercept stderr.write and silently
+// drop lines that match known noise patterns.
+const _origStderrWrite = process.stderr.write.bind(process.stderr);
+const NOISE_PATTERNS = [
+  /Config warnings/,
+  /plugin not found/,
+  /\[diagnostic\]/,
+  /lane wait exceeded/,
+  /\[agent\]/,
+  /embedded run agent end/,
+  /embedded run failover/,
+  /stale config entry/,
+];
+process.stderr.write = function (chunk: any, ...args: any[]): boolean {
+  const str = typeof chunk === "string" ? chunk : chunk?.toString?.() ?? "";
+  if (NOISE_PATTERNS.some((p) => p.test(str))) return true; // swallow
+  return (_origStderrWrite as any)(chunk, ...args);
+} as any;
+
 // openclaw-murf-tts exposes the synthesizer only through plugin.register()
 let murfProvider: any;
 plugin.register({
@@ -278,38 +300,21 @@ export async function synthesizeSpeech(text: string): Promise<Buffer | null> {
   return patchWavSizes(concatWavBuffers(buffers));
 }
 
+/**
+ * Lightweight warmup — force openclaw to load its config, resolve skill
+ * definitions, and initialize the provider. This is the expensive cold-
+ * start work that makes the first real chat() call take 40-60s if done
+ * lazily. We send a one-word "hi" through a throwaway session and swallow
+ * the response (we don't care what the LLM says, we just want openclaw's
+ * internals initialized). Errors are silently swallowed — the first real
+ * chat() will surface them with a proper error message.
+ */
 export async function warmup(): Promise<void> {
-  // The active provider/model is already shown in the startup banner —
-  // no need to re-log it here.
-  //
-  // Race the warmup against a hard timeout so a misconfigured provider
-  // can't hang the entire agent startup. The timeout resolves silently
-  // (the next real chat() call will surface any underlying error).
-  const warmupCall = getReplyFromConfig(
-    { Body: "ping", SessionKey: "warmup", CommandSource: "native" as const, Provider: "cli" },
+  await getReplyFromConfig(
+    { Body: "hi", SessionKey: "warmup-discard", CommandSource: "native" as const, Provider: "cli" },
     {},
     CONFIG_OVERRIDE,
-  ).then(
-    () => undefined,
-    () => undefined,
-  );
-
-  let timeoutHandle: NodeJS.Timeout | undefined;
-  const timeoutPromise = new Promise<"timeout">((resolve) => {
-    timeoutHandle = setTimeout(() => resolve("timeout"), WARMUP_TIMEOUT_MS);
-  });
-
-  try {
-    const winner = await Promise.race([warmupCall.then(() => "ok" as const), timeoutPromise]);
-    if (winner === "timeout") {
-      logSystem(
-        `Warmup timed out after ${(WARMUP_TIMEOUT_MS / 1000).toFixed(0)}s — continuing anyway. ` +
-          `If this is a misconfigured LLM provider, the next request will surface the real error.`,
-      );
-    }
-  } finally {
-    if (timeoutHandle) clearTimeout(timeoutHandle);
-  }
+  ).catch(() => {});
 }
 
 export async function chat(userText: string): Promise<AgentResponse> {
