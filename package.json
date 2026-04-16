@@ -4,12 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "tsx src/index.ts"
+    "start": "node --max-old-space-size=512 --import tsx/esm src/index.ts"
   },
   "dependencies": {
     "@deepgram/sdk": "^5.0.0",
     "boxen": "^8.0.1",
     "chalk": "^5.6.2",
+    "decibri": "^3.0.0",
     "dotenv": "^17.4.1",
     "node-record-lpcm16": "^1.0.1",
     "openclaw": "^2026.4.8",

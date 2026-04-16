@@ -1,22 +1,20 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import Decibri from "decibri";
 import WebSocket from "ws";
 import { logError, logSystem } from "./ui.js";
 
 type TranscriptionCallback = (text: string) => void;
 
-let soxProcess: ChildProcess | null = null;
+let mic: InstanceType<typeof Decibri> | null = null;
 let ws: WebSocket | null = null;
 
 /**
- * Tear down any existing SoX process and Deepgram WebSocket.
+ * Tear down any existing mic capture and Deepgram WebSocket.
  */
 export function stopListening(): void {
-  if (soxProcess) {
-    soxProcess.removeAllListeners();
-    soxProcess.stdout?.removeAllListeners();
-    soxProcess.stderr?.removeAllListeners();
-    soxProcess.kill();
-    soxProcess = null;
+  if (mic) {
+    mic.removeAllListeners();
+    mic.stop();
+    mic = null;
   }
   if (ws) {
     ws.removeAllListeners();
@@ -27,22 +25,9 @@ export function stopListening(): void {
   }
 }
 
-function startMicCapture(): ChildProcess {
-  return spawn("sox", [
-    "-t", "waveaudio", "default",
-    "--no-show-progress",
-    "--rate", "16000",
-    "--channels", "1",
-    "--encoding", "signed-integer",
-    "--bits", "16",
-    "--type", "raw",
-    "-",
-  ]);
-}
-
 /**
- * Open Deepgram WS, spawn SoX, stream mic audio. Calls onReady() when
- * the first audio chunk reaches Deepgram (mic is genuinely hot).
+ * Open Deepgram WS, start decibri mic capture, stream audio. Calls
+ * onReady() when the first audio chunk reaches Deepgram (mic is genuinely hot).
  */
 export function startListening(
   onTranscription: TranscriptionCallback,
@@ -61,7 +46,7 @@ export function startListening(
   const url =
     "wss://api.deepgram.com/v1/listen?" +
     "model=nova-2&language=en&smart_format=true&interim_results=true" +
-    "&endpointing=300&encoding=linear16&sample_rate=16000&channels=1";
+    "&endpointing=200&encoding=linear16&sample_rate=16000&channels=1";
 
   if (!quiet) logSystem("Connecting to Deepgram…");
 
@@ -72,12 +57,15 @@ export function startListening(
   ws.on("open", () => {
     if (!quiet) logSystem("Deepgram connected — starting mic capture…");
     try {
-      soxProcess = startMicCapture();
-
-      soxProcess.on("error", (err: Error) => handleRecordingError(err));
+      mic = new Decibri({
+        sampleRate: 16000,
+        channels: 1,
+        format: "int16",
+        framesPerBuffer: 1600,
+      });
 
       let firstChunk = true;
-      soxProcess.stdout!.on("data", (chunk: Buffer) => {
+      mic.on("data", (chunk: Buffer) => {
         if (ws?.readyState === WebSocket.OPEN) {
           ws.send(chunk);
           if (firstChunk) {
@@ -88,19 +76,14 @@ export function startListening(
         }
       });
 
-      soxProcess.stderr!.on("data", (data: Buffer) => {
-        const msg = data.toString().trim();
-        if (!msg) return;
-        if (/error|fail|cannot|denied|not found|ENOENT/i.test(msg)) {
-          handleRecordingError(new Error(msg));
-        }
-      });
-
-      soxProcess.on("close", (code) => {
-        if (code && code !== 0) logError(`SoX exited with code ${code}`);
+      mic.on("error", (err: Error) => {
+        logError(`Mic capture error: ${err.message}`);
+        stopListening();
       });
     } catch (err: unknown) {
-      handleRecordingError(err);
+      const message = err instanceof Error ? err.message : String(err);
+      logError(`Mic init failed: ${message}`);
+      stopListening();
     }
   });
 
@@ -122,25 +105,10 @@ export function startListening(
 
   ws.on("error", (err: Error) => logError(`Deepgram WS error: ${err.message}`));
 
-  ws.on("close", (code, reason) => {
+  ws.on("close", (code: number, reason: Buffer) => {
     const reasonStr = reason?.toString().trim();
     if (!quiet) {
       logSystem(`Deepgram WS closed (code=${code}${reasonStr ? `, reason=${reasonStr}` : ""}).`);
     }
   });
-}
-
-function handleRecordingError(err: unknown): void {
-  const message = err instanceof Error ? err.message : String(err);
-  const code = (err as NodeJS.ErrnoException)?.code;
-
-  if (code === "ENOENT" && /sox/i.test(message)) {
-    logError(
-      "Microphone access failed. Windows requires SoX. " +
-        "Download from SourceForge and add it to your PATH, or run this in WSL.",
-    );
-  } else {
-    logError(`Recording failed [${code ?? "unknown"}]: ${message}`);
-  }
-  stopListening();
 }

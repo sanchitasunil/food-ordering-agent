@@ -37,10 +37,16 @@ Never call `food dishes` without a `--restaurant` flag — it returns 0 results 
 
 ### Workflow
 
-1. Run `node skills/swiggy/swiggy-cli.js food addresses` to get the user's `addressId`. If exactly one address, use it without asking.
-2. When the user says what food they want, ALWAYS start with `food search "<query>" --address-id <id>` to find restaurants that serve it.
-3. Pick the top result (or ask the user to pick) and note the restaurant `id`.
-4. Use `food dishes "<item>" --address-id <id> --restaurant <restaurant-id>` to find the specific menu item's `menu_item_id`.
+CRITICAL: Chain multiple tool calls in a SINGLE turn. Do NOT stop to announce
+what you're about to do. If the user says "I want biryani", you should get
+the address AND search for restaurants in the same turn, then respond with
+the results. Never say "let me find that for you" and go back to listening —
+actually find it and tell them what you found.
+
+1. Run `node skills/swiggy/swiggy-cli.js food addresses` to get the user's `addressId`. If exactly one address, use it immediately — do NOT stop to ask or announce.
+2. In the SAME turn, run `food search "<query>" --address-id <id>` to find restaurants.
+3. Respond with the top 2 results. Only THEN wait for the user's next instruction.
+4. When the user picks a restaurant or asks for a specific item, use `food dishes "<item>" --address-id <id> --restaurant <restaurant-id>`.
 5. Use `food cart-add` to add it to the cart.
 6. Before placing any order, run `food cart --address-id <id>`, summarize briefly (items, total, short address label), and get explicit user confirmation.
 7. Only call `food order --address-id <id> --confirm` after the user clearly says yes.

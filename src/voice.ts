@@ -1,66 +1,56 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import { writeFile, unlink } from "node:fs/promises";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { randomBytes } from "node:crypto";
+import Decibri from "decibri";
 
-let currentProcess: ChildProcess | null = null;
+const { DecibriOutput } = Decibri;
 
-/** Fix RIFF sizes for streaming TTS; pad silence so SoX does not clip start/end. */
-function repairWav(buf: Buffer): Buffer {
+let currentSpeaker: InstanceType<typeof DecibriOutput> | null = null;
+
+/**
+ * Extract raw PCM data from a WAV buffer, skipping the header.
+ * Returns the PCM payload starting after the "data" sub-chunk header.
+ */
+function extractPcm(buf: Buffer): Buffer {
   if (buf.length < 44) return buf;
   if (buf.toString("ascii", 0, 4) !== "RIFF") return buf;
-  if (buf.toString("ascii", 8, 12) !== "WAVE") return buf;
-
-  const leadSilence = Buffer.alloc(48000); // 24kHz × 2 bytes × 1.0s
-  const tailSilence = Buffer.alloc(24000); // 24kHz × 2 bytes × 0.5s
-
-  const header = buf.subarray(0, 44);
-  const audioData = buf.subarray(44);
-  const padded = Buffer.concat([header, leadSilence, audioData, tailSilence]);
-
-  padded.writeUInt32LE(padded.length - 8, 4);
-
-  for (let i = 12; i < padded.length - 8; i++) {
-    if (padded.toString("ascii", i, i + 4) === "data") {
-      padded.writeUInt32LE(padded.length - i - 8, i + 4);
-      break;
+  for (let i = 12; i < buf.length - 8; i++) {
+    if (buf.toString("ascii", i, i + 4) === "data") {
+      return buf.subarray(i + 8);
     }
   }
-
-  return padded;
+  // Fallback: assume standard 44-byte header
+  return buf.subarray(44);
 }
 
-/** WAV → temp file → SoX to default output; resolves when playback ends. */
+/** Play a WAV buffer through the default speaker via decibri. */
 export async function playAudio(buffer: Buffer): Promise<void> {
-  const fixed = repairWav(Buffer.from(buffer));
-  const tmpPath = join(tmpdir(), `openclaw-tts-${randomBytes(4).toString("hex")}.wav`);
-  await writeFile(tmpPath, fixed);
+  stopPlayback();
 
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const proc = spawn("sox", ["-q", tmpPath, "-t", "waveaudio", "default"], {
-        stdio: "ignore",
-      });
-      currentProcess = proc;
+  const pcm = extractPcm(Buffer.from(buffer));
+  if (pcm.length === 0) return;
 
-      proc.on("close", () => {
-        currentProcess = null;
-        resolve();
-      });
-      proc.on("error", (err) => {
-        currentProcess = null;
-        reject(err);
-      });
+  return new Promise<void>((resolve, reject) => {
+    const speaker = new DecibriOutput({
+      sampleRate: 24000,
+      channels: 1,
+      format: "int16",
     });
-  } finally {
-    await unlink(tmpPath).catch(() => {});
-  }
+    currentSpeaker = speaker;
+
+    speaker.on("finish", () => {
+      currentSpeaker = null;
+      resolve();
+    });
+    speaker.on("error", (err) => {
+      currentSpeaker = null;
+      reject(err);
+    });
+
+    speaker.end(pcm);
+  });
 }
 
 export function stopPlayback(): void {
-  if (currentProcess) {
-    currentProcess.kill();
-    currentProcess = null;
+  if (currentSpeaker) {
+    currentSpeaker.stop();
+    currentSpeaker = null;
   }
 }

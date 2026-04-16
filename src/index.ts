@@ -1,8 +1,9 @@
 import "dotenv/config";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { startListening, stopListening } from "./ear.js";
 import {
   chat,
-  synthesizeSpeech,
   warmup,
   ACTIVE_PROVIDER,
   ACTIVE_MODEL,
@@ -23,8 +24,6 @@ import {
 } from "./ui.js";
 
 // ── Graceful shutdown ────────────────────────────────────────────
-// SoX child processes keep the event loop alive. Without this handler,
-// Ctrl+C appears to hang because Node waits for the orphaned SoX to exit.
 
 function shutdown(): void {
   stopPlayback();
@@ -37,13 +36,23 @@ function shutdown(): void {
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
-// ── Pre-generated audio clips ────────────────────────────────────
-
-let fillerAudio: Buffer | null = null;
-let fillerLongAudio: Buffer | null = null;
+// ── Pre-baked audio clips ────────────────────────────────────────
+// Loaded from disk at startup — no Murf API call needed, so they're
+// available instantly even before the plugin initializes.
 
 const INTRO_TEXT = "Hi, I'm your food ordering assistant. What are you in the mood for?";
-let introAudio: Buffer | null = null;
+
+function loadAsset(name: string): Buffer | null {
+  try {
+    return readFileSync(resolve("assets", name));
+  } catch {
+    return null;
+  }
+}
+
+const introAudio = loadAsset("intro.wav");
+const fillerAudio = loadAsset("filler.wav");
+const fillerLongAudio = loadAsset("filler-long.wav");
 
 // ── Conversation turn handler ────────────────────────────────────
 
@@ -88,7 +97,7 @@ async function handleTranscription(text: string): Promise<void> {
     logError(err);
   }
 
-  startListening(handleTranscription);
+  startListening(handleTranscription, { quiet: true });
   startListeningSpinner("Listening…");
 }
 
@@ -105,25 +114,24 @@ printBanner({
 
 const finishWarming = startWarmingBanner();
 
-// TTS pregen runs first (~3s). We can't start mic capture yet because
-// SoX playback (intro greeting) and SoX capture both need the Windows
-// waveaudio device — they can't share it. Mic opens after intro ends.
-await Promise.all([
-  synthesizeSpeech(INTRO_TEXT).then((buf) => { introAudio = buf; }).catch(() => {}),
-  synthesizeSpeech("One moment please.").then((buf) => { fillerAudio = buf; }).catch(() => {}),
-  synthesizeSpeech("I'm checking on it, hang tight.").then((buf) => { fillerLongAudio = buf; }).catch(() => {}),
-]);
+// Kick off OpenClaw warmup in background — the expensive cold-start
+// (config load, skill resolution, plugin init) happens here instead
+// of on the first chat() call. Using setImmediate so the event loop
+// stays free for mic setup and intro playback.
+setImmediate(() => { warmup().catch(() => {}); });
 
 finishWarming();
 printTurnDivider();
 logAgent(INTRO_TEXT);
 logVoice(INTRO_TEXT);
 
+// decibri uses WASAPI, not SoX — playback and capture can run on
+// separate devices simultaneously. No need to wait for intro to end.
 if (introAudio) {
-  await playAudio(introAudio).catch(() => {});
+  playAudio(introAudio).catch(() => {});
 }
 
-// Connect mic after playback releases the audio device.
+// Connect mic immediately (decibri doesn't conflict with playback).
 startThinking("Connecting mic…");
 startListening(handleTranscription, {
   quiet: true,
@@ -133,12 +141,5 @@ startListening(handleTranscription, {
   },
 });
 
-// Keep the event loop alive indefinitely — without this, Node exits
-// after the top-level await chain completes because startListening is
-// callback-based and doesn't return a promise.
+// Keep the event loop alive indefinitely.
 setInterval(() => {}, 60000);
-
-// Warmup on next tick — must NOT run inside onReady because it blocks
-// the event loop during openclaw config loading, which starves SoX
-// events and causes Deepgram to time out.
-setImmediate(() => { warmup().catch(() => {}); });

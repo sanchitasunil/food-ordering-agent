@@ -12,7 +12,7 @@ https://github.com/user-attachments/assets/placeholder-demo-video
 
 ## What it does
 
-1. Listens to your voice via SoX and streams audio to Deepgram Nova-2 for real-time transcription.
+1. Listens to your voice via decibri (native WASAPI/CoreAudio/ALSA) and streams audio to Deepgram Nova-2 for real-time transcription.
 2. Sends the transcript to an OpenClaw agent backed by a configurable LLM (Gemini, OpenRouter, or OpenCode).
 3. The agent calls Swiggy's live MCP servers to search restaurants, browse menus, manage a cart, and place orders — all via voice.
 4. Reads the response back through Murf FALCON TTS with an Indian English voice.
@@ -38,9 +38,14 @@ pnpm start
 |---|---|---|
 | Node.js 22+ | Runtime (ESM-only) | [nodejs.org](https://nodejs.org/) |
 | pnpm | Package manager | `npm i -g pnpm` |
-| SoX | Mic capture + audio playback | Windows: [SourceForge](https://sourceforge.net/projects/sox/), add to PATH. macOS: `brew install sox`. Linux: `apt install sox` |
 
-Verify SoX is on PATH: `sox --version`
+Audio capture and playback use [decibri](https://www.npmjs.com/package/decibri), a native addon with pre-built binaries — no external audio tools needed. It uses WASAPI on Windows, CoreAudio on macOS, and ALSA on Linux.
+
+> **Linux only:** if ALSA headers are missing (common on minimal servers/containers), install them:
+> ```bash
+> sudo apt install libasound2-dev   # Debian/Ubuntu
+> ```
+> Desktop Linux distros typically have these already.
 
 ## API keys
 
@@ -93,9 +98,9 @@ The startup banner shows which provider and model are active.
 ```
 src/
   index.ts    Event loop: mic → transcribe → think → speak → repeat
-  ear.ts      SoX mic capture + Deepgram WebSocket streaming
+  ear.ts      decibri mic capture + Deepgram WebSocket streaming
   brain.ts    OpenClaw agent config, LLM routing, Murf TTS synthesis
-  voice.ts    WAV repair + SoX playback
+  voice.ts    decibri speaker playback
   ui.ts       Terminal rendering (chalk + ora + boxen)
 
 workspace/
@@ -114,7 +119,7 @@ config/
 ```
                     ┌─────────────────────────────────────┐
                     │                                     │
-  mic ──► SoX ──► Deepgram WS ──► transcript             │
+  mic ──► decibri ──► Deepgram WS ──► transcript             │
                                       │                   │
                                       ▼                   │
                                OpenClaw Agent             │
@@ -130,7 +135,7 @@ config/
                                Agent reply                │
                                       │                   │
                                       ▼                   │
-                               Murf TTS ──► SoX ──► speakers
+                               Murf TTS ──► decibri ──► speakers
                                       │                   │
                                       └───────────────────┘
 ```
@@ -181,7 +186,7 @@ Color scheme: blue = user, yellow = agent, green = tools, magenta = TTS, cyan = 
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `spawn sox ENOENT` | SoX not installed or not on PATH | Install SoX, add to PATH, restart terminal |
+| `decibri` / audio device error | No audio input/output device found | Check OS sound settings. On Linux, ensure ALSA is installed (`sudo apt install libasound2-dev`) |
 | No audio output after agent reply | Murf API key missing/invalid, or system volume muted | Check `MURF_API_KEY` in `.env`. Check OS volume mixer |
 | Deepgram WS closed (code=1011) | Free Deepgram credits exhausted | Top up at [console.deepgram.com](https://console.deepgram.com) |
 | `client_id and redirect_uri are required` during mcporter auth | mcporter URL-truncation bug on Windows | Run `mcporter --log-level debug auth swiggy-food --reset`, copy the full URL from the log output, paste into browser manually |
@@ -189,7 +194,7 @@ Color scheme: blue = user, yellow = agent, green = tools, magenta = TTS, cyan = 
 | First response is slow (~15-50s) | OpenClaw cold-starts on the first real query (loads skills, resolves config, initializes provider) | Subsequent responses are faster (7-20s). The warmup runs in parallel with startup audio but may not finish in time |
 | `LLM call timed out after 180s` | Provider is down, misconfigured, or rate-limited | Switch `LLM_PROVIDER` in `.env` to a different backend |
 | Agent returns error strings as speech | LLM provider returned an error that OpenClaw surfaced as text | Check the terminal for the actual error message. Usually a billing/quota issue |
-| Audio gets cut off at the end | Tail silence too short for SoX | Increase `tailSilence` in `src/voice.ts` (currently 0.5s) |
+| Audio gets cut off at the end | decibri output stream ending early | File an issue — this shouldn't happen with the native audio backend |
 
 ## Project structure
 
@@ -212,7 +217,7 @@ src/
   index.ts            Entry point + event loop
   ear.ts              Mic capture + Deepgram STT
   brain.ts            LLM routing + TTS synthesis + chunking
-  voice.ts            WAV repair + SoX playback
+  voice.ts            decibri speaker playback
   ui.ts               Terminal rendering
 tests/
   voice-flow-smoke.ts Full pipeline smoke test (text-driven, no mic)

@@ -1,8 +1,8 @@
 import { resolve } from "node:path";
-import { performance } from "node:perf_hooks";
+import { readFileSync } from "node:fs";
 import { getReplyFromConfig } from "openclaw";
 import plugin from "openclaw-murf-tts";
-import { logTool, logAgent, logSystem, logTimings } from "./ui.js";
+import { logTool, logAgent } from "./ui.js";
 
 // Local openclaw.json instead of ~/.openclaw/
 process.env.OPENCLAW_CONFIG_PATH ??= resolve("openclaw.json");
@@ -110,8 +110,30 @@ export const CONFIG_OVERRIDE = {
       extraDirs: [resolve("skills")],
     },
   },
+  messages: {
+    tts: {
+      provider: "murf",
+      auto: "always",
+      mode: "final",
+      providers: {
+        murf: {
+          voiceId: "en-IN-anisha",
+          model: "FALCON",
+          format: "WAV",
+          sampleRate: 24000,
+          locale: "en-IN",
+          style: "Conversational",
+          rate: 0,
+          pitch: 0,
+          region: "global",
+        },
+      },
+    },
+  },
   plugins: {
-    entries: {},
+    entries: {
+      "murf-tts": { enabled: true },
+    },
   },
 };
 
@@ -271,30 +293,36 @@ export async function synthesizeSpeech(text: string): Promise<Buffer | null> {
   if (!murfProvider?.synthesize || !text.trim()) return null;
 
   const chunks = chunkTextForTts(text, MURF_MAX_TEXT_LENGTH);
-  const buffers: Buffer[] = [];
 
-  for (const chunk of chunks) {
-    const result = await murfProvider.synthesize({
-      text: chunk,
-      target: "audio",
-      providerConfig: {
-        apiKey: process.env.MURF_API_KEY,
-        voiceId: "en-IN-anisha",
-        model: "FALCON",
-        format: "WAV",
-        sampleRate: 24000,
-        locale: "en-IN",
-        style: "Conversational",
-        rate: 0,
-        pitch: 0,
-        region: "global",
-      },
-      providerOverrides: {},
-      timeoutMs: MURF_TIMEOUT_MS,
-    });
+  const providerConfig = {
+    apiKey: process.env.MURF_API_KEY,
+    voiceId: "en-IN-anisha",
+    model: "FALCON",
+    format: "WAV",
+    sampleRate: 24000,
+    locale: "en-IN",
+    style: "Conversational",
+    rate: 0,
+    pitch: 0,
+    region: "global",
+  };
 
-    if (result?.audioBuffer) buffers.push(result.audioBuffer);
-  }
+  // Synthesize all chunks in parallel for lower wall-clock latency.
+  const results = await Promise.all(
+    chunks.map((chunk) =>
+      murfProvider.synthesize({
+        text: chunk,
+        target: "audio",
+        providerConfig,
+        providerOverrides: {},
+        timeoutMs: MURF_TIMEOUT_MS,
+      }),
+    ),
+  );
+
+  const buffers = results
+    .map((r: any) => r?.audioBuffer)
+    .filter(Boolean) as Buffer[];
 
   if (buffers.length === 0) return null;
   return patchWavSizes(concatWavBuffers(buffers));
@@ -327,9 +355,6 @@ export async function chat(userText: string): Promise<AgentResponse> {
     Location: BENGALURU,
   };
 
-  let toolCount = 0;
-  const llmStart = performance.now();
-
   // Race the LLM round-trip against a hard timeout. A misconfigured or
   // unreachable provider would otherwise hang chat() forever and lock the
   // user out of the conversation loop. On timeout we throw a clean error
@@ -340,7 +365,6 @@ export async function chat(userText: string): Promise<AgentResponse> {
       // print only at the "start" phase so the badge reflects distinct calls.
       if (payload.name && (payload.phase === "start" || !payload.phase)) {
         logTool(payload.name);
-        toolCount++;
       }
     },
   }, CONFIG_OVERRIDE);
@@ -368,25 +392,30 @@ export async function chat(userText: string): Promise<AgentResponse> {
     if (llmTimeoutHandle) clearTimeout(llmTimeoutHandle);
   }
 
-  const llmMs = performance.now() - llmStart;
-
   const payload = Array.isArray(result) ? result[0] : result;
   const text = payload?.text ?? "";
   logAgent(text);
 
+  // Prefer native TTS audio attached by OpenClaw (mediaUrl is a local file
+  // path written by maybeApplyTtsToPayload). Fall back to manual
+  // synthesizeSpeech() if OpenClaw didn't produce audio (e.g. plugin failed
+  // or was disabled).
   let audio: Buffer | null = null;
-  let ttsMs = 0;
-  if (text) {
+  const mediaPath: string | undefined = payload?.mediaUrl;
+  if (mediaPath) {
     try {
-      const ttsStart = performance.now();
-      audio = await synthesizeSpeech(text);
-      ttsMs = performance.now() - ttsStart;
+      audio = readFileSync(mediaPath);
     } catch (err) {
-      logAgent(`[TTS failed: ${err instanceof Error ? err.message : err}]`);
+      logAgent(`[native TTS file read failed: ${err instanceof Error ? err.message : err}]`);
     }
   }
-
-  logTimings({ llmMs, ttsMs, toolCount, charCount: text.length });
+  if (!audio && text) {
+    try {
+      audio = await synthesizeSpeech(text);
+    } catch (err) {
+      logAgent(`[TTS fallback failed: ${err instanceof Error ? err.message : err}]`);
+    }
+  }
 
   return { text, audio };
 }

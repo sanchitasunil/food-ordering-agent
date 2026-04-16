@@ -26,10 +26,29 @@
       "extraDirs": ["./skills"]
     }
   },
+  "messages": {
+    "tts": {
+      "provider": "murf",
+      "auto": "always",
+      "mode": "final",
+      "providers": {
+        "murf": {
+          "voiceId": "en-IN-anisha",
+          "model": "FALCON",
+          "format": "WAV",
+          "sampleRate": 24000,
+          "locale": "en-IN",
+          "style": "Conversational",
+          "rate": 0,
+          "pitch": 0,
+          "region": "global"
+        }
+      }
+    }
+  },
   "plugins": {
     "entries": {
-      "murf": { "enabled": false },
-      "murf-tts": { "enabled": false }
+      "murf-tts": { "enabled": true }
     }
   }
 }
