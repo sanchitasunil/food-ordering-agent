@@ -1,0 +1,11 @@
+{
+  "base": [
+    "biryani", "dosa", "idli", "vada", "sambar", "uttapam", "paratha",
+    "paneer", "tikka", "masala", "naan", "roti", "chapati", "thali",
+    "samosa", "pakora", "chaat", "pani puri", "bhel puri", "pav bhaji",
+    "chole bhature", "rajma", "dal", "korma", "vindaloo", "chettinad",
+    "kulfi", "gulab jamun", "rasgulla", "jalebi", "lassi", "chai",
+    "Bengaluru", "Bangalore", "Swiggy", "Zomato",
+    "order", "deliver", "restaurant", "menu", "spicy", "veg", "non-veg"
+  ]
+}

@@ -132,39 +132,6 @@ export function logError(err: unknown): void {
   );
 }
 
-// ── Timing badges ────────────────────────────────────────────────
-
-export interface TurnTimings {
-  /** Wall-clock ms spent in OpenClaw / LLM / tool calls. */
-  llmMs: number;
-  /** Wall-clock ms spent in Murf TTS synthesis. */
-  ttsMs: number;
-  /** Number of distinct tool start events observed. */
-  toolCount: number;
-  /** Length of the agent's text response, for char/sec sanity. */
-  charCount: number;
-}
-
-/**
- * Print a compact one-line timing badge after each turn. Format:
- *
- *   ⏱  LLM 2.4s · 3 tools · TTS 11.2s · 213 chars
- *
- * All numbers in cyan (system info), labels dim, separators dim.
- */
-export function logTimings(t: TurnTimings): void {
-  const parts: string[] = [
-    chalk.dim("LLM ") + chalk.cyan(`${(t.llmMs / 1000).toFixed(1)}s`),
-    chalk.cyan(`${t.toolCount}`) + chalk.dim(t.toolCount === 1 ? " tool" : " tools"),
-    chalk.dim("TTS ") + chalk.cyan(`${(t.ttsMs / 1000).toFixed(1)}s`),
-    chalk.cyan(`${t.charCount}`) + chalk.dim(" chars"),
-  ];
-  const body = parts.join(chalk.dim(" · "));
-  process.stdout.write(
-    " ".repeat(LABEL_WIDTH) + chalk.dim("⏱  ") + body + "\n",
-  );
-}
-
 // ── Spinner ──────────────────────────────────────────────────────
 
 /**

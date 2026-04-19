@@ -29,11 +29,11 @@
   "messages": {
     "tts": {
       "provider": "murf",
-      "auto": "always",
+      "auto": "off",
       "mode": "final",
       "providers": {
         "murf": {
-          "voiceId": "en-IN-anisha",
+          "voiceId": "en-IN-anusha",
           "model": "FALCON",
           "format": "WAV",
           "sampleRate": 24000,

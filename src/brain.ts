@@ -86,6 +86,28 @@ export const CONFIG_OVERRIDE = {
       model: { primary: ACTIVE_MODEL },
       workspace: resolve("workspace"),
       skipBootstrap: true,
+      // Block streaming is off by default in openclaw (see reply.js: the
+      // resolver falls through to "off" unless either disableBlockStreaming
+      // is false at call time OR this default is "on"). Flip it on here AND
+      // at the call site for belt-and-suspenders.
+      blockStreamingDefault: "on",
+      // The coalescer default of minChars=800 / maxChars=1200 is tuned for
+      // long-form chat replies — it buffers short replies into one big
+      // chunk, defeating streaming for our typical 150–300 char voice
+      // responses. Drive the thresholds way down and flush on every enqueue
+      // so each sentence-ish segment the model emits fires onBlockReply
+      // immediately.
+      blockStreamingChunk: {
+        minChars: 1,
+        maxChars: 200,
+        breakPreference: "sentence",
+      },
+      blockStreamingCoalesce: {
+        minChars: 1,
+        maxChars: 200,
+        idleMs: 0,
+        flushOnEnqueue: true,
+      },
     },
   },
   models: {
@@ -112,12 +134,18 @@ export const CONFIG_OVERRIDE = {
   },
   messages: {
     tts: {
+      // Auto-TTS is OFF on purpose: openclaw's built-in pipeline only fires
+      // once at end-of-reply (mode: "final"), which would force users to wait
+      // for the full LLM response before hearing anything. We drive Murf
+      // ourselves from openclaw's onBlockReply streaming hook instead — same
+      // plugin, same provider config, just synthesized per-block so playback
+      // can start while later blocks are still arriving.
       provider: "murf",
-      auto: "always",
+      auto: "off",
       mode: "final",
       providers: {
         murf: {
-          voiceId: "en-IN-anisha",
+          voiceId: "en-IN-anusha",
           model: "FALCON",
           format: "WAV",
           sampleRate: 24000,
@@ -141,7 +169,23 @@ export { ACTIVE_PROVIDER, ACTIVE_MODEL };
 
 export interface AgentResponse {
   text: string;
+  /**
+   * Full-response audio. Populated only on the non-streaming path (no
+   * onAudioChunk callback) or as a fallback when the streaming path
+   * produced no chunks. Null when audio was streamed incrementally —
+   * the caller will have already received those chunks via onAudioChunk.
+   */
   audio: Buffer | null;
+}
+
+export interface ChatStreamOptions {
+  /**
+   * Fires for each synthesized block as it becomes available, in reply
+   * order. Caller is responsible for queueing them onto a playback stream.
+   * When provided, AgentResponse.audio will normally be null (unless no
+   * blocks streamed and the fallback path ran).
+   */
+  onAudioChunk?: (audio: Buffer) => void;
 }
 
 // Murf's actual server-side cap for FALCON + en-US-natalie is 3000 chars per
@@ -296,7 +340,7 @@ export async function synthesizeSpeech(text: string): Promise<Buffer | null> {
 
   const providerConfig = {
     apiKey: process.env.MURF_API_KEY,
-    voiceId: "en-IN-anisha",
+    voiceId: "en-IN-anusha",
     model: "FALCON",
     format: "WAV",
     sampleRate: 24000,
@@ -336,16 +380,34 @@ export async function synthesizeSpeech(text: string): Promise<Buffer | null> {
  * the response (we don't care what the LLM says, we just want openclaw's
  * internals initialized). Errors are silently swallowed — the first real
  * chat() will surface them with a proper error message.
+ *
+ * The resulting promise is cached so repeat callers share one cold-start
+ * and so chat() can await it on the first turn — otherwise the first real
+ * LLM call races openclaw's still-initializing shared state and ends up
+ * paying the cold-start twice.
  */
-export async function warmup(): Promise<void> {
-  await getReplyFromConfig(
+let warmupPromise: Promise<void> | null = null;
+
+export function warmup(): Promise<void> {
+  if (warmupPromise) return warmupPromise;
+  const p: Promise<void> = getReplyFromConfig(
     { Body: "hi", SessionKey: "warmup-discard", CommandSource: "native" as const, Provider: "cli" },
     {},
     CONFIG_OVERRIDE,
-  ).catch(() => {});
+  ).then(() => undefined, () => undefined);
+  warmupPromise = p;
+  return p;
 }
 
-export async function chat(userText: string): Promise<AgentResponse> {
+export async function chat(
+  userText: string,
+  streamOpts?: ChatStreamOptions,
+): Promise<AgentResponse> {
+  // Make sure openclaw's cold-start is finished before we submit the
+  // real query. On turn 2+ this resolves instantly; on turn 1 it keeps
+  // us from racing an in-flight warmup inside openclaw's shared state.
+  if (warmupPromise) await warmupPromise;
+
   const ctx = {
     Body: userText,
     SessionKey: SESSION_KEY,
@@ -355,17 +417,146 @@ export async function chat(userText: string): Promise<AgentResponse> {
     Location: BENGALURU,
   };
 
+  const onAudioChunk = streamOpts?.onAudioChunk;
+  const streamingEnabled = Boolean(onAudioChunk);
+
+  let blockEverFired = false;
+
+  // ── Unified text + dispatch state ───────────────────────────────
+  // Both onBlockReply and onPartialReply write into a single canonical text
+  // accumulator. spokenLen tracks how far into canonicalText we've already
+  // dispatched to Murf. This way the two hooks never double-speak: each new
+  // chunk is the slice from spokenLen to "what we know about the reply now".
+  //
+  // Why two hooks at all? Empirically (turn 1 of the prior run) onBlockReply
+  // can fire late or only once for short tool-driven turns where Gemini emits
+  // the whole reply post-tools. onPartialReply gives us token-level streaming
+  // for those cases. When blocks ARE granular, we let blocks dispatch and
+  // partials become text-tracking-only (so we don't double-dispatch overlapping
+  // content from two interleaved sources).
+  let canonicalText = "";
+  let spokenLen = 0;
+  let lastPartialText = ""; // for delta-vs-accumulated detection on partials
+
+  // Per-chunk synthesis chains in reply order even though Murf round-trips
+  // race. Each new chunk kicks off synthesis right away (parallel network),
+  // but the emit step awaits the prior chunk's synthesis — so playback
+  // receives them in order.
+  let emitChain: Promise<void> = Promise.resolve();
+  let streamedAnyAudio = false;
+
+  const dispatchChunk = (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    if (!streamingEnabled) return;
+    const synthP = synthesizeSpeech(trimmed).catch(() => null);
+    emitChain = emitChain.then(async () => {
+      const audio = await synthP;
+      if (audio) {
+        streamedAnyAudio = true;
+        onAudioChunk!(audio);
+      }
+    });
+  };
+
+  // Sentence-boundary detection for the partial-driven path. Strict trailing
+  // whitespace requirement so a punctuation char that just happens to be the
+  // current end-of-stream isn't mistakenly flushed mid-sentence.
+  const SENTENCE_END = /[.!?]+\s+/g;
+  const flushSentencesFromCanonical = () => {
+    const tail = canonicalText.slice(spokenLen);
+    SENTENCE_END.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    let lastIdx = 0;
+    while ((m = SENTENCE_END.exec(tail)) !== null) {
+      const endIdx = m.index + m[0].length;
+      const sentence = tail.slice(lastIdx, endIdx);
+      dispatchChunk(sentence);
+      lastIdx = endIdx;
+    }
+    spokenLen += lastIdx;
+  };
+
   // Race the LLM round-trip against a hard timeout. A misconfigured or
   // unreachable provider would otherwise hang chat() forever and lock the
   // user out of the conversation loop. On timeout we throw a clean error
   // that handleTranscription() can surface via logError().
   const llmCall = getReplyFromConfig(ctx, {
+    // Force block streaming ON. Without this, reply.ts's resolver falls
+    // through to "off" for any channel that doesn't explicitly enable it —
+    // and our "cli" provider doesn't. Pass `false` (not `true`): the option
+    // name is "disable", so false means don't-disable.
+    disableBlockStreaming: false,
     onToolStart(payload: { name?: string; phase?: string }) {
-      // The hook fires multiple times per tool (start/update/…). Count and
-      // print only at the "start" phase so the badge reflects distinct calls.
+      // The hook fires multiple times per tool (start/update/…). Log only
+      // at the "start" phase so each tool prints once.
       if (payload.name && (payload.phase === "start" || !payload.phase)) {
         logTool(payload.name);
       }
+    },
+    onBlockReply(payload: any) {
+      // Skip openclaw's internal-only blocks: reasoning/thinking traces and
+      // compaction status notices aren't user-facing speech.
+      if (payload?.isReasoning || payload?.isCompactionNotice) return;
+      const text: string = (payload?.text ?? "").trim();
+      if (!text) return;
+
+      blockEverFired = true;
+
+      // Merge block text into the canonical accumulator. Three cases:
+      //   - block already covered: skip
+      //   - block extends what we have (startsWith canonical): replace
+      //   - block adds new content: append with a space joiner
+      let updated = false;
+      if (canonicalText && canonicalText.includes(text)) {
+        // already accounted for (e.g. partials got there first)
+      } else if (canonicalText && text.startsWith(canonicalText)) {
+        canonicalText = text;
+        updated = true;
+      } else {
+        const joiner = canonicalText && !canonicalText.endsWith(" ") ? " " : "";
+        canonicalText = canonicalText + joiner + text;
+        updated = true;
+      }
+
+      // Dispatch the new portion immediately. Block boundaries are openclaw's
+      // own "this is a coherent reply unit" signal, so we don't gate on
+      // sentence punctuation here.
+      if (updated) {
+        const newPortion = canonicalText.slice(spokenLen);
+        if (newPortion.trim()) {
+          dispatchChunk(newPortion);
+          spokenLen = canonicalText.length;
+        }
+      }
+    },
+    onPartialReply(payload: any) {
+      const incoming: string = payload?.text ?? "";
+      if (!incoming) return;
+
+      // Detect delta-vs-accumulated form. openclaw's `textForTyping` wraps
+      // signalTextDelta — name suggests delta — but providers vary. The
+      // prefix check covers both shapes.
+      let delta: string;
+      if (incoming.startsWith(lastPartialText)) {
+        delta = incoming.slice(lastPartialText.length);
+        lastPartialText = incoming;
+      } else {
+        delta = incoming;
+        lastPartialText = lastPartialText + incoming;
+      }
+      if (!delta) return;
+
+      // If blocks are doing the dispatch, partials only update the canonical
+      // text accumulator (so the final text reflects everything the model
+      // emitted). Otherwise partials drive sentence-boundary dispatch.
+      if (blockEverFired) {
+        if (!canonicalText.includes(delta)) canonicalText += delta;
+        return;
+      }
+
+      canonicalText += delta;
+      flushSentencesFromCanonical();
     },
   }, CONFIG_OVERRIDE);
 
@@ -393,13 +584,44 @@ export async function chat(userText: string): Promise<AgentResponse> {
   }
 
   const payload = Array.isArray(result) ? result[0] : result;
-  const text = payload?.text ?? "";
+  // openclaw drops payload.text from the final result when block streaming
+  // actually streamed (see agent-runner: shouldDropFinalPayloads). So
+  // canonicalText (built from the streaming hooks) is the source of truth
+  // when streaming worked; fall back to payload.text only when nothing
+  // streamed.
+  const payloadText: string = payload?.text ?? "";
+
+  // Flush any remaining canonical text as a final chunk. This catches the
+  // last partial-driven sentence (which has no trailing whitespace yet) plus
+  // any tail content blocks failed to dispatch. After this spokenLen catches
+  // up to canonicalText.length.
+  if (streamingEnabled && spokenLen < canonicalText.length) {
+    const tail = canonicalText.slice(spokenLen).trim();
+    if (tail) dispatchChunk(tail);
+    spokenLen = canonicalText.length;
+  }
+
+  // If neither streaming hook ever emitted text but openclaw still has a
+  // payload.text, treat the payload as the canonical reply. Catches
+  // configs that suppress both block and partial streaming.
+  if (!canonicalText && payloadText) canonicalText = payloadText;
+
+  const text = canonicalText.trim();
   logAgent(text);
 
-  // Prefer native TTS audio attached by OpenClaw (mediaUrl is a local file
-  // path written by maybeApplyTtsToPayload). Fall back to manual
-  // synthesizeSpeech() if OpenClaw didn't produce audio (e.g. plugin failed
-  // or was disabled).
+  // Streaming path: drain the per-chunk emit chain so the caller has
+  // received every chunk before we hand back. If at least one chunk made it
+  // through, audio: null tells the caller "I already streamed it."
+  if (streamingEnabled) {
+    await emitChain;
+    if (streamedAnyAudio) return { text, audio: null };
+    // Fall through to the batch path below — neither hook produced audio
+    // (very rare; protects against total streaming pipeline failure).
+  }
+
+  // Batch path. Auto-TTS is off in CONFIG_OVERRIDE so payload.mediaUrl will
+  // normally be empty; we synthesize manually here. Kept as a non-streaming
+  // fallback / compat path.
   let audio: Buffer | null = null;
   const mediaPath: string | undefined = payload?.mediaUrl;
   if (mediaPath) {
