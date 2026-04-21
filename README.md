@@ -39,7 +39,7 @@ And three API keys (all free tiers work):
 |---|---|
 | `DEEPGRAM_API_KEY` | [console.deepgram.com](https://console.deepgram.com/). $200 free credit |
 | `MURF_API_KEY` | [murf.ai/api](https://murf.ai/api) |
-| Any LLM provider key | Pick one of three the code supports: `GEMINI_API_KEY` from [aistudio.google.dev](https://aistudio.google.dev/apikey), `OPENROUTER_API_KEY` from [openrouter.ai](https://openrouter.ai/keys), or `OPENCODE_API_KEY` from [opencode.ai/auth](https://opencode.ai/auth). Set `LLM_PROVIDER` in `.env` to match. |
+| Any LLM provider key | Pick one of three the code supports: `GEMINI_API_KEY` from [aistudio.google.com](https://aistudio.google.com/app/api-keys), `OPENROUTER_API_KEY` from [openrouter.ai](https://openrouter.ai/keys), or `OPENCODE_API_KEY` from [opencode.ai/auth](https://opencode.ai/auth). Set `LLM_PROVIDER` in `.env` to match. |
 
 ---
 
@@ -104,13 +104,13 @@ You can change the voice later by editing `voiceId` and `locale` together (they 
 
 ## Step 3: Set up the Swiggy skill
 
-The Swiggy skill lives on [ClawHub](https://hub.openclaw.kr), OpenClaw's skill registry. If you were starting from scratch you'd install it with:
+The Swiggy skill lives on [ClawHub](https://clawhub.ai/), OpenClaw's skill registry. If you were starting from scratch you'd install it with:
 
 ```bash
 clawhub install swiggy
 ```
 
-In this repo the [skill](skills/swiggy/) is already vendored and registered in [openclaw.json](openclaw.json) under `agents.defaults.skills`, so there's no install step to run here.
+In this repo the [skill](https://clawhub.ai/regalstreak/swiggy) is already vendored and registered in [openclaw.json](openclaw.json) under `agents.defaults.skills`, so there's no install step to run here.
 
 One tweak worth flagging: [skills/swiggy/SKILL.md](skills/swiggy/SKILL.md) has been edited so every command reads `node skills/swiggy/swiggy-cli.js food <cmd>` instead of the upstream `swiggy food <cmd>`. OpenClaw's shell executor doesn't always have npm globals on `PATH`, so the `swiggy` binary installed by `clawhub` isn't reachable from the agent's shell. Same arguments, same behavior, just a direct path to the CLI file. If you swap in a different skill later and see "command not found" in the agent logs, this is usually what's going on.
 
@@ -153,28 +153,28 @@ The startup banner appears, the agent greets you with *"Hi, I'm your food orderi
 
 Here's what the first turn looks like:
 
-```ansi
-[36m╭──────────────────────────────────────────────────╮[0m
-[36m│[0m   [36;1mfood-ordering-agent[0m                            [36m│[0m
-[36m│[0m   voice → LLM → tools → voice                    [36m│[0m
-[36m│[0m                                                  [36m│[0m
-[36m│[0m   STT     deepgram flux                          [36m│[0m
-[36m│[0m   LLM     gemini  ›  google/gemini-2.5-flash     [36m│[0m
-[36m│[0m   TTS     murf falcon  ›  en-IN-anusha           [36m│[0m
-[36m│[0m   Skill   swiggy-food                            [36m│[0m
-[36m│[0m                                                  [36m│[0m
-[36m│[0m   Press Ctrl+C to exit                           [36m│[0m
-[36m╰──────────────────────────────────────────────────╯[0m
-[36m✔ Ready (3.2s)[0m
-[36m──────────────────────────────────────────────────────────────[0m
-[33m🤖 Agent    Hi, I'm your food ordering assistant. What are you in the mood for?[0m
-[35m🔊 Speaking Hi, I'm your food ordering assistant. What are you in the mood for?[0m
-[36m──────────────────────────────────────────────────────────────[0m
-[34m🎤 You      I feel like having biryani.[0m
-  [32m🔧 Tool     exec[0m
-  [32m🔧 Tool     exec[0m
-  [33m🤖 Agent    Two top-rated near you. Meghana Foods, four point five, about thirty seven minutes. Paradise Biryani, four point four, forty two minutes. Which one?[0m
-  [35m🔊 Speaking Two top-rated near you. Meghana Foods, four point five, about thirty seven minutes…[0m
+```
+╭──────────────────────────────────────────────────╮
+│   food-ordering-agent                            │
+│   voice → LLM → tools → voice                    │
+│                                                  │
+│   STT     deepgram flux                          │
+│   LLM     gemini  ›  google/gemini-2.5-flash     │
+│   TTS     murf falcon  ›  en-IN-anusha           │
+│   Skill   swiggy-food                            │
+│                                                  │
+│   Press Ctrl+C to exit                           │
+╰──────────────────────────────────────────────────╯
+✔ Ready (3.2s)
+──────────────────────────────────────────────────────────────
+🤖 Agent    Hi, I'm your food ordering assistant. What are you in the mood for?
+🔊 Speaking Hi, I'm your food ordering assistant. What are you in the mood for?
+──────────────────────────────────────────────────────────────
+🎤 You      I feel like having biryani.
+  🔧 Tool     exec
+  🔧 Tool     exec
+  🤖 Agent    Two top-rated near you. Meghana Foods, four point five, about thirty seven minutes. Paradise Biryani, four point four, forty two minutes. Which one?
+  🔊 Speaking Two top-rated near you. Meghana Foods, four point five, about thirty seven minutes…
 ```
 
 Color scheme: blue = user, yellow = agent, green = tools, magenta = TTS, cyan = system.
@@ -245,7 +245,7 @@ Switch LLMs without touching code or restarting the build:
 
 | `LLM_PROVIDER` | Default model | Get a key |
 |---|---|---|
-| `gemini` | `google/gemini-2.5-flash` | [aistudio.google.dev](https://aistudio.google.dev/apikey) |
+| `gemini` | `google/gemini-2.5-flash` | [aistudio.google.com](https://aistudio.google.com/app/api-keys) |
 | `openrouter` | `google/gemma-4-31b-it:free` | [openrouter.ai](https://openrouter.ai/keys) |
 | `opencode` | `opencode/big-pickle` (free) | [opencode.ai/auth](https://opencode.ai/auth) |
 
@@ -318,7 +318,7 @@ tests/
 
 ## Make it your own
 
-The Swiggy skill is one swap away from anything else on [ClawHub](https://hub.openclaw.kr). The voice loop doesn't care what the agent does. It just turns transcripts into agent calls and replies into audio.
+The Swiggy skill is one swap away from anything else on [ClawHub](https://clawhub.ai/). The voice loop doesn't care what the agent does. It just turns transcripts into agent calls and replies into audio.
 
 ```bash
 clawhub install <some-other-skill>
