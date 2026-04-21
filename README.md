@@ -1,12 +1,16 @@
 # food-ordering-agent
 
-A voice-first [OpenClaw](https://openclaw.kr) agent that orders food on Swiggy for you.
+A voice-first [OpenClaw](https://openclaw.ai/) agent that orders food on Swiggy for you.
 
 This is a showcase of what OpenClaw can do when you point its agent runtime, skill system, and block streaming at a voice loop. OpenClaw is doing the heavy lifting: it picks tools, runs the Swiggy skill that actually places the order, and streams its reply block-by-block into Murf TTS so the speaker starts talking mid-reply. Deepgram Flux handles the mic side, decibri handles native audio in and out. About 700 lines of TypeScript glue ties it all together.
 
 ```
-mic → Deepgram Flux → OpenClaw + Swiggy skill → Murf Falcon → speakers
-       (STT)          (LLM + tools, streaming)   (TTS, per-sentence)
+┌─────┐     ┌──────────┐     ┌──────────────┐     ┌──────────┐     ┌──────────┐
+│     │     │ Deepgram │     │   OpenClaw   │     │   Murf   │     │          │
+│ mic │────▶│   Flux   │────▶│   + Swiggy   │────▶│  Falcon  │────▶│ speakers │
+│     │     │  (STT)   │     │ (LLM+tools)  │     │  (TTS)   │     │          │
+└─────┘     └──────────┘     └──────────────┘     └──────────┘     └──────────┘
+     capture     transcribe       reason + act         synthesize       play
 ```
 
 The interesting part: replies stream sentence-by-sentence. As soon as the LLM emits its first sentence, Murf synthesizes it and the speaker starts playing while the rest of the reply is still being generated. That comes from OpenClaw's block streaming hooks, the same pipeline used by its Telegram, Matrix, and WhatsApp channels, pointed at voice instead of chat.
@@ -54,13 +58,21 @@ Open `.env` and paste in your Deepgram, Murf, and LLM keys. Make sure `LLM_PROVI
 
 ## Step 2: Set up the Murf TTS plugin
 
-The Murf plugin is the `openclaw-murf-tts` npm package. If you were starting from scratch you'd add it with:
+The Murf plugin lives in OpenClaw's plugin registry as `murf-tts`. If you were starting from scratch, you'd install it with:
 
 ```bash
-pnpm add openclaw-murf-tts
+openclaw plugins install murf-tts
 ```
 
-In this repo it's already listed as a dependency in [package.json](package.json) and enabled in [openclaw.json](openclaw.json) under `plugins.entries`, so `pnpm install` from Step 1 has already pulled it in. Nothing extra to run.
+Or directly from npm:
+
+```bash
+npm install murf-tts
+```
+
+(`openclaw` is a peer dependency, so your gateway/workspace provides it.)
+
+In this repo the plugin is already listed as a dependency in [package.json](package.json) and enabled in [openclaw.json](openclaw.json) under `plugins.entries`, so `pnpm install` from Step 1 has already pulled it in. Nothing extra to run.
 
 The only thing the plugin needs from you is the `MURF_API_KEY` you already set in Step 1. If you haven't signed up yet, grab a key at [murf.ai/api](https://murf.ai/api) and drop it in `.env`.
 
@@ -141,28 +153,28 @@ The startup banner appears, the agent greets you with *"Hi, I'm your food orderi
 
 Here's what the first turn looks like:
 
-```
-╭──────────────────────────────────────────────────╮
-│   food-ordering-agent                            │
-│   voice → LLM → tools → voice                    │
-│                                                  │
-│   STT     deepgram flux                          │
-│   LLM     gemini  ›  google/gemini-2.5-flash     │
-│   TTS     murf falcon  ›  en-IN-anusha           │
-│   Skill   swiggy-food                            │
-│                                                  │
-│   Press Ctrl+C to exit                           │
-╰──────────────────────────────────────────────────╯
-✔ Ready (3.2s)
-──────────────────────────────────────────────────────────────
-🤖 Agent    Hi, I'm your food ordering assistant. What are you in the mood for?
-🔊 Speaking Hi, I'm your food ordering assistant. What are you in the mood for?
-──────────────────────────────────────────────────────────────
-🎤 You      I feel like having biryani.
-  🔧 Tool     exec
-  🔧 Tool     exec
-  🤖 Agent    Two top-rated near you. Meghana Foods, four point five, about thirty seven minutes. Paradise Biryani, four point four, forty two minutes. Which one?
-  🔊 Speaking Two top-rated near you. Meghana Foods, four point five, about thirty seven minutes…
+```ansi
+[36m╭──────────────────────────────────────────────────╮[0m
+[36m│[0m   [36;1mfood-ordering-agent[0m                            [36m│[0m
+[36m│[0m   voice → LLM → tools → voice                    [36m│[0m
+[36m│[0m                                                  [36m│[0m
+[36m│[0m   STT     deepgram flux                          [36m│[0m
+[36m│[0m   LLM     gemini  ›  google/gemini-2.5-flash     [36m│[0m
+[36m│[0m   TTS     murf falcon  ›  en-IN-anusha           [36m│[0m
+[36m│[0m   Skill   swiggy-food                            [36m│[0m
+[36m│[0m                                                  [36m│[0m
+[36m│[0m   Press Ctrl+C to exit                           [36m│[0m
+[36m╰──────────────────────────────────────────────────╯[0m
+[36m✔ Ready (3.2s)[0m
+[36m──────────────────────────────────────────────────────────────[0m
+[33m🤖 Agent    Hi, I'm your food ordering assistant. What are you in the mood for?[0m
+[35m🔊 Speaking Hi, I'm your food ordering assistant. What are you in the mood for?[0m
+[36m──────────────────────────────────────────────────────────────[0m
+[34m🎤 You      I feel like having biryani.[0m
+  [32m🔧 Tool     exec[0m
+  [32m🔧 Tool     exec[0m
+  [33m🤖 Agent    Two top-rated near you. Meghana Foods, four point five, about thirty seven minutes. Paradise Biryani, four point four, forty two minutes. Which one?[0m
+  [35m🔊 Speaking Two top-rated near you. Meghana Foods, four point five, about thirty seven minutes…[0m
 ```
 
 Color scheme: blue = user, yellow = agent, green = tools, magenta = TTS, cyan = system.
@@ -176,7 +188,7 @@ Every turn runs through six stages:
 | # | Stage | Component | What it does |
 |---|---|---|---|
 | 1 | Capture | [decibri](https://www.npmjs.com/package/decibri) | 16-bit PCM at 16 kHz from the mic, 100ms frames |
-| 2 | Transcribe | [Deepgram Flux](https://developers.deepgram.com/docs/flux) | Voice-agent STT with model-integrated end-of-turn detection. Streams over `/v2/listen` |
+| 2 | Transcribe | [Deepgram Flux](https://flux.deepgram.com/) | Voice-agent STT with model-integrated end-of-turn detection. Streams over `/v2/listen` |
 | 3 | Reason | OpenClaw + LLM | Picks tools, drives the Swiggy skill, generates the reply |
 | 4 | Act | Swiggy skill | Fetches addresses, searches restaurants, manages the cart, places the order |
 | 5 | Speak | Murf Falcon (via openclaw plugin) | Per-sentence TTS streamed on openclaw block hooks |
@@ -320,4 +332,4 @@ A GitHub PR-merging voice agent. A calendar scheduler. A Notion assistant. Same 
 
 ## Credits
 
-Built with [OpenClaw](https://openclaw.kr), [murf-tts](https://www.npmjs.com/package/openclaw-murf-tts), [Deepgram Flux](https://developers.deepgram.com/docs/flux), [Murf](https://murf.ai), [Swiggy skill](skills/swiggy/), and [decibri](https://www.npmjs.com/package/decibri).
+Built with [OpenClaw](https://openclaw.ai/), [murf-tts](https://clawhub.ai/plugins/murf-tts), [Deepgram Flux](https://flux.deepgram.com/), [Murf](https://murf.ai/api), [Swiggy skill](https://clawhub.ai/regalstreak/swiggy), and [decibri](https://www.npmjs.com/package/decibri).
