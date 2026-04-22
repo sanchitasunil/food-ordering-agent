@@ -16,7 +16,6 @@ import {
   logTool,
   logVoice,
   logError,
-  logTimings,
   startThinking,
   stopThinking,
   startListeningSpinner,
@@ -60,12 +59,6 @@ async function main(): Promise<void> {
     "You have one saved address in Electronic City. Should I use it?",
   );
   logVoice("You have one saved address in Electronic City. Should I use it?");
-  logTimings({
-    llmMs: 1240,
-    ttsMs: 2380,
-    toolCount: 1,
-    charCount: 64,
-  });
 
   // 5. Conversation turn 2 — chained query, multiple tools, longer LLM
   await sleep(300);
@@ -82,12 +75,6 @@ async function main(): Promise<void> {
   logVoice(
     "Two open near you: Meghana Foods, biryani, about 33 minutes. Paradise Biryani, also biryani, 33 minutes.",
   );
-  logTimings({
-    llmMs: 3470,
-    ttsMs: 4910,
-    toolCount: 2,
-    charCount: 105,
-  });
 
   // 6. Error path
   await sleep(300);

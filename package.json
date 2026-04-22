@@ -14,7 +14,7 @@
     "dotenv": "^17.4.1",
     "node-record-lpcm16": "^1.0.1",
     "openclaw": "^2026.4.8",
-    "openclaw-murf-tts": "^0.1.0",
+    "openclaw-murf-tts": "^0.2.8",
     "ora": "^9.3.0",
     "ws": "^8.18.0"
   },

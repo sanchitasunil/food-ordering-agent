@@ -44,13 +44,6 @@ const BENGALURU = { lat: 12.9716, lng: 77.5946 };
 // LLM_PROVIDER: gemini | openrouter | opencode. Optional LLM_MODEL overrides
 // the default for the active provider. Keys: GEMINI_API_KEY, OPENROUTER_API_KEY,
 // OPENCODE_API_KEY (opencode = SST opencode.ai Zen gateway).
-//
-// Per node_modules/openclaw/docs/providers/opencode.md the supported Zen models
-// are e.g. opencode/claude-opus-4-6, opencode/gpt-5.4, opencode/gemini-3-pro.
-// Earlier we tried `opencode/big-pickle` (sourced from a third-party catalog
-// mirror) and it hung the warmup indefinitely — that model id is not routable
-// through openclaw's opencode provider. Default to gemini-3-pro since Gemini
-// is the family we already know works for tool calling here.
 const PROVIDER_DEFAULT_MODELS: Record<string, string> = {
   gemini: "google/gemini-2.5-flash",
   openrouter: "openrouter/google/gemma-4-31b-it:free",
@@ -86,6 +79,12 @@ export const CONFIG_OVERRIDE = {
       model: { primary: ACTIVE_MODEL },
       workspace: resolve("workspace"),
       skipBootstrap: true,
+      // Openclaw's default is 48h, but in practice openclaw's gateway/runtime
+      // surfaces "Request timed out before a response was generated" much
+      // sooner for embedded runs that chain several tool calls. 300s gives
+      // legitimate multi-tool address+search+menu chains headroom without
+      // letting a genuinely hung provider lock the session.
+      timeoutSeconds: 300,
       // Block streaming is off by default in openclaw (see reply.js: the
       // resolver falls through to "off" unless either disableBlockStreaming
       // is false at call time OR this default is "on"). Flip it on here AND
@@ -376,10 +375,14 @@ export async function synthesizeSpeech(text: string): Promise<Buffer | null> {
  * Lightweight warmup — force openclaw to load its config, resolve skill
  * definitions, and initialize the provider. This is the expensive cold-
  * start work that makes the first real chat() call take 40-60s if done
- * lazily. We send a one-word "hi" through a throwaway session and swallow
- * the response (we don't care what the LLM says, we just want openclaw's
- * internals initialized). Errors are silently swallowed — the first real
- * chat() will surface them with a proper error message.
+ * lazily. Errors are silently swallowed — the first real chat() will
+ * surface them with a proper error message.
+ *
+ * The body asks the model what it can help with AND explicitly tells it
+ * not to call any tools, so the warmup path exercises skill-doc parsing
+ * and tool-routing compilation without paying for real mcporter round-
+ * trips. A one-word "hi" skipped the skill path entirely and a
+ * non-restricted query ran the full tool chain (60s+ warmups).
  *
  * The resulting promise is cached so repeat callers share one cold-start
  * and so chat() can await it on the first turn — otherwise the first real
@@ -391,7 +394,7 @@ let warmupPromise: Promise<void> | null = null;
 export function warmup(): Promise<void> {
   if (warmupPromise) return warmupPromise;
   const p: Promise<void> = getReplyFromConfig(
-    { Body: "hi", SessionKey: "warmup-discard", CommandSource: "native" as const, Provider: "cli" },
+    { Body: "Briefly: what kinds of things can you help me with? Don't call any tools, just describe in one sentence.", SessionKey: "warmup-discard", CommandSource: "native" as const, Provider: "cli" },
     {},
     CONFIG_OVERRIDE,
   ).then(() => undefined, () => undefined);
@@ -420,23 +423,19 @@ export async function chat(
   const onAudioChunk = streamOpts?.onAudioChunk;
   const streamingEnabled = Boolean(onAudioChunk);
 
-  let blockEverFired = false;
-
-  // ── Unified text + dispatch state ───────────────────────────────
-  // Both onBlockReply and onPartialReply write into a single canonical text
-  // accumulator. spokenLen tracks how far into canonicalText we've already
-  // dispatched to Murf. This way the two hooks never double-speak: each new
-  // chunk is the slice from spokenLen to "what we know about the reply now".
-  //
-  // Why two hooks at all? Empirically (turn 1 of the prior run) onBlockReply
-  // can fire late or only once for short tool-driven turns where Gemini emits
-  // the whole reply post-tools. onPartialReply gives us token-level streaming
-  // for those cases. When blocks ARE granular, we let blocks dispatch and
-  // partials become text-tracking-only (so we don't double-dispatch overlapping
-  // content from two interleaved sources).
+  // ── Text + dispatch state ───────────────────────────────────────
+  // canonicalText is built exclusively from onBlockReply deltas. Partials
+  // aren't consulted — they interleave token-by-token with block fires and
+  // double-wrote canonicalText in testing. If blocks never fire at all,
+  // payloadText from the final result is used as a fallback.
+  // spokenLen tracks how far into canonicalText has been dispatched to Murf.
+  // currentBlockStream tracks the running accumulated text of the current
+  // block stream; openclaw starts a new stream after tool calls complete, so
+  // post-tool blocks no longer extend the pre-tool preamble — the reset-vs-
+  // extension check below handles both cases.
   let canonicalText = "";
   let spokenLen = 0;
-  let lastPartialText = ""; // for delta-vs-accumulated detection on partials
+  let currentBlockStream = "";
 
   // Per-chunk synthesis chains in reply order even though Murf round-trips
   // race. Each new chunk kicks off synthesis right away (parallel network),
@@ -459,24 +458,6 @@ export async function chat(
     });
   };
 
-  // Sentence-boundary detection for the partial-driven path. Strict trailing
-  // whitespace requirement so a punctuation char that just happens to be the
-  // current end-of-stream isn't mistakenly flushed mid-sentence.
-  const SENTENCE_END = /[.!?]+\s+/g;
-  const flushSentencesFromCanonical = () => {
-    const tail = canonicalText.slice(spokenLen);
-    SENTENCE_END.lastIndex = 0;
-    let m: RegExpExecArray | null;
-    let lastIdx = 0;
-    while ((m = SENTENCE_END.exec(tail)) !== null) {
-      const endIdx = m.index + m[0].length;
-      const sentence = tail.slice(lastIdx, endIdx);
-      dispatchChunk(sentence);
-      lastIdx = endIdx;
-    }
-    spokenLen += lastIdx;
-  };
-
   // Race the LLM round-trip against a hard timeout. A misconfigured or
   // unreachable provider would otherwise hang chat() forever and lock the
   // user out of the conversation loop. On timeout we throw a clean error
@@ -495,68 +476,29 @@ export async function chat(
       }
     },
     onBlockReply(payload: any) {
-      // Skip openclaw's internal-only blocks: reasoning/thinking traces and
-      // compaction status notices aren't user-facing speech.
       if (payload?.isReasoning || payload?.isCompactionNotice) return;
       const text: string = (payload?.text ?? "").trim();
       if (!text) return;
 
-      blockEverFired = true;
-
-      // Merge block text into the canonical accumulator. Three cases:
-      //   - block already covered: skip
-      //   - block extends what we have (startsWith canonical): replace
-      //   - block adds new content: append with a space joiner
-      let updated = false;
-      if (canonicalText && canonicalText.includes(text)) {
-        // already accounted for (e.g. partials got there first)
-      } else if (canonicalText && text.startsWith(canonicalText)) {
-        canonicalText = text;
-        updated = true;
-      } else {
-        const joiner = canonicalText && !canonicalText.endsWith(" ") ? " " : "";
-        canonicalText = canonicalText + joiner + text;
-        updated = true;
-      }
-
-      // Dispatch the new portion immediately. Block boundaries are openclaw's
-      // own "this is a coherent reply unit" signal, so we don't gate on
-      // sentence punctuation here.
-      if (updated) {
-        const newPortion = canonicalText.slice(spokenLen);
-        if (newPortion.trim()) {
-          dispatchChunk(newPortion);
-          spokenLen = canonicalText.length;
-        }
-      }
-    },
-    onPartialReply(payload: any) {
-      const incoming: string = payload?.text ?? "";
-      if (!incoming) return;
-
-      // Detect delta-vs-accumulated form. openclaw's `textForTyping` wraps
-      // signalTextDelta — name suggests delta — but providers vary. The
-      // prefix check covers both shapes.
+      // Compute delta against the current block stream, detecting resets
+      // (e.g. openclaw starts a new stream after tool calls complete).
       let delta: string;
-      if (incoming.startsWith(lastPartialText)) {
-        delta = incoming.slice(lastPartialText.length);
-        lastPartialText = incoming;
+      if (currentBlockStream && text.startsWith(currentBlockStream)) {
+        delta = text.slice(currentBlockStream.length);
+        currentBlockStream = text;
+      } else if (currentBlockStream && currentBlockStream.includes(text)) {
+        return; // already covered (e.g. partials got there first)
       } else {
-        delta = incoming;
-        lastPartialText = lastPartialText + incoming;
-      }
-      if (!delta) return;
-
-      // If blocks are doing the dispatch, partials only update the canonical
-      // text accumulator (so the final text reflects everything the model
-      // emitted). Otherwise partials drive sentence-boundary dispatch.
-      if (blockEverFired) {
-        if (!canonicalText.includes(delta)) canonicalText += delta;
-        return;
+        delta = text;
+        currentBlockStream = text;
       }
 
-      canonicalText += delta;
-      flushSentencesFromCanonical();
+      if (!delta.trim()) return;
+
+      const joiner = canonicalText && !canonicalText.endsWith(" ") ? " " : "";
+      canonicalText = canonicalText + joiner + delta;
+      dispatchChunk(delta);
+      spokenLen = canonicalText.length;
     },
   }, CONFIG_OVERRIDE);
 

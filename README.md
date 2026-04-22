@@ -58,16 +58,16 @@ Open `.env` and paste in your Deepgram, Murf, and LLM keys. Make sure `LLM_PROVI
 
 ## Step 2: Set up the Murf TTS plugin
 
-The Murf plugin lives in OpenClaw's plugin registry as `murf-tts`. If you were starting from scratch, you'd install it with:
+The Murf plugin lives in OpenClaw's plugin registry as [`openclaw-murf-tts`](https://clawhub.ai/plugins/openclaw-murf-tts). If you were starting from scratch, you'd install it with:
 
 ```bash
-openclaw plugins install murf-tts
+openclaw plugins install openclaw-murf-tts
 ```
 
 Or directly from npm:
 
 ```bash
-npm install murf-tts
+npm install openclaw-murf-tts
 ```
 
 (`openclaw` is a peer dependency, so your gateway/workspace provides it.)
@@ -255,7 +255,7 @@ The voice, voice settings, and TTS provider are in [openclaw.json](openclaw.json
 
 ---
 
-## Honest about latency
+## Latency
 
 The first turn is slow. Cold-starts from openclaw (skill resolution, plugin init), the LLM provider, and Murf all stack up. Expect **15-50 seconds** before you hear the first sentence on turn 1, with most of that being the cold start plus tool-call chains.
 
@@ -332,4 +332,4 @@ A GitHub PR-merging voice agent. A calendar scheduler. A Notion assistant. Same 
 
 ## Credits
 
-Built with [OpenClaw](https://openclaw.ai/), [murf-tts](https://clawhub.ai/plugins/murf-tts), [Deepgram Flux](https://flux.deepgram.com/), [Murf](https://murf.ai/api), [Swiggy skill](https://clawhub.ai/regalstreak/swiggy), and [decibri](https://www.npmjs.com/package/decibri).
+Built with [OpenClaw](https://openclaw.ai/), [openclaw-murf-tts](https://clawhub.ai/plugins/openclaw-murf-tts), [Deepgram Flux](https://flux.deepgram.com/), [Murf](https://murf.ai/api), [Swiggy skill](https://clawhub.ai/regalstreak/swiggy), and [decibri](https://www.npmjs.com/package/decibri).
