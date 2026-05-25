@@ -144,7 +144,7 @@ export const CONFIG_OVERRIDE = {
       mode: "final",
       providers: {
         murf: {
-          voiceId: "en-IN-anusha",
+          voiceId: "en-IN-anisha",
           model: "FALCON",
           format: "WAV",
           sampleRate: 24000,
@@ -339,7 +339,7 @@ export async function synthesizeSpeech(text: string): Promise<Buffer | null> {
 
   const providerConfig = {
     apiKey: process.env.MURF_API_KEY,
-    voiceId: "en-IN-anusha",
+    voiceId: "en-IN-anisha",
     model: "FALCON",
     format: "WAV",
     sampleRate: 24000,

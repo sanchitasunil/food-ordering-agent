@@ -81,14 +81,27 @@ node skills/swiggy/swiggy-cli.js food track [<orderId>]
 - **`food dishes`** returns full item details including `menu_item_id`, variants,
   and addons. Use `dishes` (not `menu`) to get the `menu_item_id` you need for
   `cart-add`.
-- **`cart-add`** in this CLI only supports SIMPLE items — items where both
-  `hasVariants` is false and `hasAddons` is false. For items with variants or
-  addons, you must drive `update_food_cart` directly via mcporter:
-  ```bash
-  mcporter call swiggy-food.update_food_cart --args '<json>'
-  ```
-  with a `cartItems` array carrying the right `variants`/`variantsV2`/`addons`
-  shapes per the schema. Most users won't need this for casual orders.
+- **ALWAYS run `food dishes` before `cart-add`** to get `menu_item_id` and check
+  `hasVariants`. **NEVER ask the user for `menu_item_id`** — always fetch it
+  yourself via `food dishes`.
+- **After running `food dishes`, you MUST read `hasVariants` from the output
+  before attempting `cart-add`.** Do not attempt `cart-add` without this check.
+- **If `cart-add` fails**, the most common cause is a stale cart containing items
+  from a different restaurant. Run `food cart --address-id <id>` to inspect it.
+  If it has items from a different restaurant, run `food cart-clear` and then
+  retry `cart-add`. Do NOT ask the user what to do — handle this automatically.
+- **`cart-add`** works for items where addons are entirely optional. The rules:
+  - `hasVariants: true` → **NEVER call `cart-add`** — it will fail. Tell the
+    user immediately:
+    > "This item comes in different sizes that I can't select for you yet. You
+    >  can add it directly in the Swiggy app, or I can suggest a simpler item."
+    Do not attempt cart-add, do not ask the user for a size — just say this.
+  - `hasVariants: false` AND `hasAddons: true` → **`cart-add` works** as long
+    as all addon groups have `minAddons: 0` (i.e. all optional). The item is
+    added without any addons. You do NOT need to check individual addon groups
+    before calling `cart-add` — just call it. If Swiggy rejects it, tell the
+    user to add it in the app.
+  - `hasVariants: false` AND `hasAddons: false` → `cart-add` works normally.
 
 ## CRITICAL: Safety Rules
 
@@ -132,27 +145,27 @@ node skills/swiggy/swiggy-cli.js food track [<orderId>]
 ```bash
 # 1. Get addressId
 node skills/swiggy/swiggy-cli.js food addresses
-# → user has address d7bo18tdmtl1u1bd1kng (Electronic City)
+# → user has address &lt;your-address-id&gt; (Electronic City)
 
 # 2. Search restaurants
-node skills/swiggy/swiggy-cli.js food search "biryani" --address-id d7bo18tdmtl1u1bd1kng
+node skills/swiggy/swiggy-cli.js food search "biryani" --address-id &lt;your-address-id&gt;
 # → Meghana Foods (id 86358), OPEN
 
 # 3. Browse menu (compact) to find an item
-node skills/swiggy/swiggy-cli.js food menu 86358 --address-id d7bo18tdmtl1u1bd1kng
+node skills/swiggy/swiggy-cli.js food menu 86358 --address-id &lt;your-address-id&gt;
 
 # 4. Get full item details (gives menu_item_id)
-node skills/swiggy/swiggy-cli.js food dishes "pepper chicken" --address-id d7bo18tdmtl1u1bd1kng --restaurant 86358
+node skills/swiggy/swiggy-cli.js food dishes "pepper chicken" --address-id &lt;your-address-id&gt; --restaurant 86358
 # → Pepper Chicken, menu_item_id 24794114, hasVariants false, hasAddons false
 
 # 5. Add to cart
-node skills/swiggy/swiggy-cli.js food cart-add --restaurant 86358 --address-id d7bo18tdmtl1u1bd1kng --item 24794114 --quantity 1
+node skills/swiggy/swiggy-cli.js food cart-add --restaurant 86358 --address-id &lt;your-address-id&gt; --item 24794114 --quantity 1
 
 # 6. Preview cart and read to user
-node skills/swiggy/swiggy-cli.js food cart --address-id d7bo18tdmtl1u1bd1kng
+node skills/swiggy/swiggy-cli.js food cart --address-id &lt;your-address-id&gt;
 
 # 7. Get explicit user confirmation, then place order
-node skills/swiggy/swiggy-cli.js food order --address-id d7bo18tdmtl1u1bd1kng --confirm
+node skills/swiggy/swiggy-cli.js food order --address-id &lt;your-address-id&gt; --confirm
 ```
 
 ### Order tracking
@@ -192,7 +205,7 @@ After a successful `place_food_order`, append to `memory/swiggy-orders.json`:
   "restaurant": "Meghana Foods",
   "items": [{ "name": "Pepper Chicken", "quantity": 1, "price": 360 }],
   "total": "₹463",
-  "addressId": "d7bo18tdmtl1u1bd1kng",
+  "addressId": "&lt;your-address-id&gt;",
   "orderId": "..."
 }
 ```

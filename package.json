@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node --max-old-space-size=512 --import tsx/esm src/index.ts"
+    "start": "node --max-old-space-size=512 --import tsx/esm src/index.ts",
+    "gen-assets": "tsx scripts/gen-assets.ts",
+    "postinstall": "tsx scripts/gen-assets.ts"
   },
   "dependencies": {
     "@deepgram/sdk": "^5.0.0",

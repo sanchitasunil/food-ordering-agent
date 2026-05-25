@@ -33,7 +33,7 @@
       "mode": "final",
       "providers": {
         "murf": {
-          "voiceId": "en-IN-anusha",
+          "voiceId": "en-IN-anisha",
           "model": "FALCON",
           "format": "WAV",
           "sampleRate": 24000,

@@ -206,6 +206,12 @@ async function handleTranscription(text: string): Promise<void> {
     });
 
     await playback.finish();
+    // Give the audio driver buffer time to drain before arming the mic.
+    // DecibriOutput's "finish" event fires when data is flushed to the
+    // WASAPI/CoreAudio buffer, not when sound stops playing. Without this
+    // pause the mic arms while the agent's voice is still audible, Deepgram
+    // transcribes it, and handleTranscription re-fires on the agent's own audio.
+    await new Promise((r) => setTimeout(r, 350));
     armMic();
   } catch (err) {
     clearTimeout(longFillerTimer);
@@ -228,7 +234,7 @@ printBanner({
   llmProvider: ACTIVE_PROVIDER,
   llmModel: ACTIVE_MODEL,
   ttsProvider: "murf falcon",
-  ttsVoice: "en-IN-anusha",
+  ttsVoice: "en-IN-anisha",
   skill: "swiggy-food",
 });
 
@@ -267,7 +273,7 @@ startListening(handleTranscription, {
   },
 });
 
-introPlayback.then(() => armMic());
+introPlayback.then(() => new Promise((r) => setTimeout(r, 350))).then(() => armMic());
 
 // Keep the event loop alive indefinitely.
 setInterval(() => {}, 60000);

@@ -46,13 +46,17 @@ And three API keys (all free tiers work):
 ## Step 1: Clone and install
 
 ```bash
-git clone <repo-url> food-ordering-agent
-cd food-ordering-agent
-pnpm install
+git clone --filter=blob:none --sparse https://github.com/murf-ai/murf-cookbook.git
+cd murf-cookbook
+git sparse-checkout set examples/openclaw/food_ordering_agent
+cd examples/openclaw/food_ordering_agent
 cp .env.example .env
+pnpm install
 ```
 
 Open `.env` and paste in your Deepgram, Murf, and LLM keys. Make sure `LLM_PROVIDER` matches whichever LLM key you filled in (`gemini`, `openrouter`, or `opencode`). If you picked Gemini, the defaults already work.
+
+`pnpm install` runs a `postinstall` script that synthesizes the pre-baked audio clips (`assets/intro.wav`, `filler.wav`, `filler-long.wav`) using your Murf key. If `MURF_API_KEY` isn't set yet when you install, run `pnpm gen-assets` once after filling in `.env`.
 
 ---
 
@@ -86,7 +90,7 @@ On startup, the plugin reads that key and openclaw routes every TTS call through
     "mode": "final",
     "providers": {
       "murf": {
-        "voiceId": "en-IN-anusha",
+        "voiceId": "en-IN-anisha",
         "model": "FALCON",
         "locale": "en-IN",
         "style": "Conversational"
@@ -116,20 +120,17 @@ One tweak worth flagging: [skills/swiggy/SKILL.md](skills/swiggy/SKILL.md) has b
 
 What the skill does need is access to your Swiggy account, which takes one OAuth handshake.
 
-First, make sure:
-
-- Your Swiggy account has **at least one saved delivery address** in the mobile app. The agent uses saved addresses, not GPS, so without one every order attempt will fail.
-- `mcporter` is installed globally (from the prerequisites table above).
+First, make sure your Swiggy account has **at least one saved delivery address** in the mobile app. The agent uses saved addresses, not GPS, so without one every order attempt will fail.
 
 Then run the auth flow once:
 
 ```bash
-mcporter auth swiggy-food
+node scripts/swiggy-auth.mjs
 ```
 
-This opens a browser, signs you into Swiggy, and saves the token locally. You won't need to redo it unless the token expires.
+This opens a browser, signs you into Swiggy via PKCE OAuth, and writes the token as a static `Authorization` header into `~/.mcporter/mcporter.json`. You won't need to redo it unless the token expires.
 
-> **Windows note:** `mcporter`'s OAuth URL gets truncated in the browser launcher on Windows. If the browser complains that `client_id` is required, run `mcporter --log-level debug auth swiggy-food --reset`, copy the full URL out of the debug log, and paste it into your browser manually.
+If the browser doesn't open automatically, the script prints the full auth URL to copy and paste it manually. The local callback server on port 3333 will catch the redirect either way.
 
 Confirm the skill can actually reach Swiggy:
 
@@ -160,7 +161,7 @@ Here's what the first turn looks like:
 │                                                  │
 │   STT     deepgram flux                          │
 │   LLM     gemini  ›  google/gemini-2.5-flash     │
-│   TTS     murf falcon  ›  en-IN-anusha           │
+│   TTS     murf falcon  ›  en-IN-anisha           │
 │   Skill   swiggy-food                            │
 │                                                  │
 │   Press Ctrl+C to exit                           │
@@ -251,7 +252,7 @@ Switch LLMs without touching code or restarting the build:
 
 Override the model on any provider with `LLM_MODEL=opencode/minimax-m2.5-free` etc. The startup banner shows which combination is active.
 
-The voice, voice settings, and TTS provider are in [openclaw.json](openclaw.json) under `messages.tts.providers.murf`. Default is `en-IN-anusha` with the Falcon model. Other Murf voices: change `voiceId` and `locale`. Make sure the locale matches the voice. `en-IN` voices don't always work with `en-US` locale settings.
+The voice, voice settings, and TTS provider are in [openclaw.json](openclaw.json) under `messages.tts.providers.murf`. Default is `en-IN-anisha` with the Falcon model. Other Murf voices: change `voiceId` and `locale`. Make sure the locale matches the voice. `en-IN` voices don't always work with `en-US` locale settings.
 
 ---
 
@@ -268,8 +269,8 @@ Subsequent turns are bounded by **how fast the LLM produces text**, not by audio
 | Symptom | Fix |
 |---|---|
 | `command not found: mcporter` | `npm i -g mcporter` |
-| `client_id and redirect_uri are required` during `mcporter auth` (Windows) | URL truncation bug. `mcporter --log-level debug auth swiggy-food --reset`, copy the full URL from the debug log, paste manually |
-| Browser doesn't open during `mcporter auth` | Copy the URL printed in the terminal and open it manually |
+| Browser doesn't open during `node scripts/swiggy-auth.mjs` | Copy the URL printed in the terminal and paste it into your browser manually. The callback server on port 3333 will catch the redirect |
+| `Error: listen EADDRINUSE :::3333` during auth | Something else is on port 3333. Stop it, then retry |
 | Agent says *"please add a delivery address"* | No saved addresses in your Swiggy account. Open the Swiggy app, save one, retry |
 | Audio device error on startup | Check OS sound settings. On minimal Linux distros, `sudo apt install libasound2-dev` and reinstall |
 | No audio output after agent reply | Check `MURF_API_KEY` and your OS volume. Plugin synth failures print to terminal |
